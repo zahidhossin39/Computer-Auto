@@ -13,6 +13,12 @@ if sys.platform == "win32":
     except Exception:
         pass
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 from src.config import load_config
 from src.audio.recorder import AudioRecorder
 from src.trigger.hotkey import GlobalHotkeyListener

@@ -10,6 +10,12 @@ import pyautogui
 from src.executor.guardrail import SafetyGuardrail
 
 try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+try:
     from google import genai
     from google.genai import types
 except ImportError:
