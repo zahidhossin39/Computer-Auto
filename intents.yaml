@@ -1,0 +1,189 @@
+# Declarative voice command intent mappings
+
+intents:
+  # System Volume & Media
+  - name: volume_up
+    category: system
+    triggers:
+      - "volume up"
+      - "turn up volume"
+      - "increase volume"
+      - "louder"
+    action:
+      type: system_action
+      command: volume_step_up
+
+  - name: volume_down
+    category: system
+    triggers:
+      - "volume down"
+      - "turn down volume"
+      - "decrease volume"
+      - "lower volume"
+      - "softer"
+    action:
+      type: system_action
+      command: volume_step_down
+
+  - name: volume_mute
+    category: system
+    triggers:
+      - "mute"
+      - "mute volume"
+      - "unmute"
+      - "silence"
+    action:
+      type: system_action
+      command: volume_toggle_mute
+
+  - name: media_play_pause
+    category: media
+    triggers:
+      - "play"
+      - "pause"
+      - "resume"
+      - "play music"
+      - "pause music"
+    action:
+      type: system_action
+      command: media_play_pause
+
+  - name: media_next
+    category: media
+    triggers:
+      - "next track"
+      - "next song"
+      - "skip"
+      - "skip song"
+    action:
+      type: system_action
+      command: media_next
+
+  - name: media_previous
+    category: media
+    triggers:
+      - "previous track"
+      - "previous song"
+      - "restart song"
+    action:
+      type: system_action
+      command: media_previous
+
+  # Window Management
+  - name: window_minimize
+    category: window
+    triggers:
+      - "minimize"
+      - "minimize window"
+      - "hide window"
+    action:
+      type: system_action
+      command: window_minimize_active
+
+  - name: window_maximize
+    category: window
+    triggers:
+      - "maximize"
+      - "maximize window"
+      - "fullscreen window"
+    action:
+      type: system_action
+      command: window_maximize_active
+
+  - name: window_restore
+    category: window
+    triggers:
+      - "restore window"
+      - "unmaximize"
+    action:
+      type: system_action
+      command: window_restore_active
+
+  - name: window_snap_left
+    category: window
+    triggers:
+      - "snap left"
+      - "tile left"
+      - "window left"
+    action:
+      type: system_action
+      command: window_snap_left
+
+  - name: window_snap_right
+    category: window
+    triggers:
+      - "snap right"
+      - "tile right"
+      - "window right"
+    action:
+      type: system_action
+      command: window_snap_right
+
+  - name: window_close
+    category: window
+    triggers:
+      - "close window"
+      - "close active window"
+      - "close this"
+    action:
+      type: system_action
+      command: window_close_active
+    is_destructive: true
+
+  # Application Launcher
+  - name: launch_notepad
+    category: app
+    triggers:
+      - "open notepad"
+      - "launch notepad"
+      - "start notepad"
+    action:
+      type: launch_app
+      target: "notepad.exe"
+
+  - name: launch_browser
+    category: app
+    triggers:
+      - "open browser"
+      - "launch browser"
+      - "open chrome"
+      - "launch chrome"
+    action:
+      type: launch_app
+      target: "chrome.exe"
+      fallback_target: "msedge.exe"
+
+  - name: launch_terminal
+    category: app
+    triggers:
+      - "open terminal"
+      - "launch terminal"
+      - "open powershell"
+      - "launch powershell"
+      - "open cmd"
+    action:
+      type: launch_app
+      target: "wt.exe"
+      fallback_target: "powershell.exe"
+
+  - name: launch_calculator
+    category: app
+    triggers:
+      - "open calculator"
+      - "launch calculator"
+      - "calc"
+    action:
+      type: launch_app
+      target: "calc.exe"
+
+  # System Power / Lock
+  - name: lock_workstation
+    category: system
+    triggers:
+      - "lock computer"
+      - "lock pc"
+      - "lock screen"
+    action:
+      type: system_action
+      command: system_lock
+    is_destructive: false
