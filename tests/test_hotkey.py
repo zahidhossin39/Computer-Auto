@@ -76,3 +76,17 @@ def test_panic_key_resets_and_triggers_panic_callback():
     detector.handle_panic()
     assert detector.is_listening is False
     on_panic.assert_called_once()
+
+
+def test_single_tap_stops_an_active_session():
+    """Once listening, one Left Ctrl tap stops it: waiting for a second tap was unreliable."""
+    from src.trigger.hotkey import DoubleTapDetector
+    states = []
+    d = DoubleTapDetector(threshold_ms=400, on_toggle=states.append)
+
+    d.handle_tap(timestamp=1.00)          # first tap: nothing yet
+    d.handle_tap(timestamp=1.20)          # double-tap starts the session
+    assert states == [True] and d.is_listening is True
+
+    d.handle_tap(timestamp=9.00)          # a single, late tap must stop it
+    assert states == [True, False] and d.is_listening is False

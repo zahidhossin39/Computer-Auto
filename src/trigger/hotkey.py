@@ -38,7 +38,13 @@ class DoubleTapDetector:
         with self._lock:
             elapsed = now - self.last_tap_time
 
-            if 0.05 < elapsed <= self.threshold_s:
+            # A session is running: one tap stops it. Waiting for a second tap made
+            # stopping unreliable, and there is nothing else Ctrl should do mid-session.
+            if self.is_listening:
+                self.is_listening = False
+                self.last_tap_time = 0.0
+                toggled, new_state = True, False
+            elif 0.05 < elapsed <= self.threshold_s:
                 # Double-tap detected!
                 self.is_listening = not self.is_listening
                 self.last_tap_time = 0.0
@@ -51,7 +57,7 @@ class DoubleTapDetector:
 
         # Call callback outside lock to avoid deadlocks
         if toggled and self.on_toggle:
-            print(f"[HOTKEY] Double-tap detected! Listening={new_state}")
+            print(f"[HOTKEY] {'Stop tap' if not new_state else 'Double-tap'} detected! Listening={new_state}")
             self.on_toggle(new_state)
 
         return toggled

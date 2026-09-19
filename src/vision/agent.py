@@ -6,6 +6,7 @@ import io
 import json
 import os
 import re
+import time
 from typing import List, Optional
 from PIL import Image
 import pyautogui
@@ -23,6 +24,8 @@ except ImportError:
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 _session = requests.Session()  # keep-alive across the 2+ calls per step
+# Tried in order when the chosen model's provider is rate-limited (429) or down
+FALLBACK_MODELS = ["google/gemini-3.1-flash-lite", "qwen/qwen3-vl-30b-a3b-instruct"]
 
 
 @dataclass
@@ -131,14 +134,24 @@ class VisionAgent:
             {"type": "image_url", "image_url": {"url": image_url}},
             {"type": "text", "text": text},
         ]})
-        r = _session.post(
-            OPENROUTER_URL,
-            headers={"Authorization": f"Bearer {self.api_key}"},
-            json={"model": self.model_name, "messages": messages, "temperature": 0},
-            timeout=60,
-        )
-        r.raise_for_status()
-        return _parse_json(r.json()["choices"][0]["message"]["content"])
+        body = {
+            "model": self.model_name, "messages": messages, "temperature": 0,
+            # If the provider is busy, OpenRouter tries these instead of failing the task
+            "models": [self.model_name] + [m for m in FALLBACK_MODELS if m != self.model_name],
+        }
+        last = None
+        for attempt in range(3):
+            r = _session.post(OPENROUTER_URL, headers={"Authorization": f"Bearer {self.api_key}"},
+                              json=body, timeout=60)
+            if r.status_code == 200:
+                return _parse_json(r.json()["choices"][0]["message"]["content"])
+            last = f"{r.status_code} {r.text[:120]}"
+            if r.status_code not in (429, 500, 502, 503, 529):  # not worth retrying
+                break
+            wait = float(r.headers.get("retry-after") or 2 * (attempt + 1))
+            print(f"[VISION]: {r.status_code} from the model, retrying in {wait:.0f}s")
+            time.sleep(min(wait, 8))
+        raise RuntimeError(f"vision model unavailable after retries: {last}")
 
     def plan_action(
         self, user_command: str, screenshot: Image.Image, history: Optional[List[str]] = None,

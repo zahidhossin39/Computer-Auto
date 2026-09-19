@@ -21,6 +21,22 @@ def test_mock_transcription():
     assert isinstance(text, str)
 
 
+def test_silent_short_audio_ignored():
+    """Verify that silent/short audio returns "" without calling the recogniser."""
+    recognizer = SpeechRecognizer(mock_mode=True)
+    recognizer._recognizer = Mock()
+    text = recognizer.transcribe(np.zeros(1000, dtype=np.float32))
+    assert text == ""
+    recognizer._recognizer.create_stream.assert_not_called()
+
+
+def test_loud_audio_mock_transcription():
+    """Verify that normal loud audio still returns the mock transcription."""
+    recognizer = SpeechRecognizer(mock_mode=True)
+    audio = np.ones(16000, dtype=np.float32) * 0.5
+    assert recognizer.transcribe(audio) == "mock transcription"
+
+
 @patch("src.stt.engine.SpeechRecognizer._init_sherpa")
 def test_real_recognizer_dispatch(mock_init):
     """Verify that transcribe calls sherpa offline stream when initialized."""

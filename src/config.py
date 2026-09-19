@@ -32,7 +32,7 @@ class Intent:
 @dataclass
 class AppConfig:
     intents: List[Intent]
-    double_tap_threshold_ms: int = 400
+    double_tap_threshold_ms: int = 600  # 400ms missed real double-taps (measured 449ms)
     sample_rate: int = 16000
     stt_provider: str = "sherpa-onnx"
     stt_model_dir: str = "models/parakeet-tdt-0.6b-int8"

@@ -170,6 +170,7 @@ class ComputerAutoDaemon:
         """
         self.continuous = not self.continuous
         self.hotkey_listener.detector.is_listening = self.continuous
+        print(f"[SESSION]: {'started' if self.continuous else 'ended'}")
         self.ui_log(f"[SESSION]: {'started' if self.continuous else 'ended'}")
         if self.continuous:
             self.play_sound(880, 100)

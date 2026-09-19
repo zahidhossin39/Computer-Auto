@@ -111,6 +111,15 @@ class SpeechRecognizer:
         if samples is None or len(samples) == 0:
             return ""
 
+        duration = len(samples) / sample_rate
+        peak = float(np.max(np.abs(samples))) if samples.size else 0.0
+
+        # Matches the recorder's own speech threshold (peak 0.010): anything it
+        # considered speech must reach the model, or quiet speech vanishes silently.
+        if duration < 0.4 or peak < 0.010:
+            print(f"[STT]: ignored {duration:.2f}s of audio (peak {peak:.3f}) - too short or too quiet")
+            return ""
+
         if self.mock_mode:
             return "mock transcription"
 
@@ -127,6 +136,7 @@ class SpeechRecognizer:
                 self._recognizer.decode_stream(stream)
                 text = stream.result.text.strip().rstrip(".?!,:;\"'").strip().lower()
                 if text:
+                    print(f'[STT]: "{text}" ({duration:.2f}s, peak {peak:.3f})')
                     return text
             except Exception:
                 pass
@@ -135,5 +145,10 @@ class SpeechRecognizer:
         if max_amp < 0.002:
             return ""
 
-        return self._transcribe_gemini(samples, sample_rate)
+        text = self._transcribe_gemini(samples, sample_rate)
+        if text:
+            print(f'[STT]: "{text}" ({duration:.2f}s, peak {peak:.3f})')
+        else:
+            print(f"[STT]: no words recognised in {duration:.2f}s of audio (peak {peak:.3f})")
+        return text
 
