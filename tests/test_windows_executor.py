@@ -48,7 +48,8 @@ def test_window_snap_actions(mock_hotkey, executor):
 
 
 @patch("os.startfile", create=True)
-def test_launch_app_success(mock_startfile, executor):
+@patch("src.executor.windows._shell_launch", return_value=False)
+def test_launch_app_success(_shell, mock_startfile, executor):
     """Verify application launching dispatches os.startfile on Windows with resolved path."""
     action = IntentAction(type="launch_app", target="notepad.exe")
     success = executor.launch_app(action)
@@ -59,9 +60,10 @@ def test_launch_app_success(mock_startfile, executor):
     assert "notepad" in called_target.lower()
 
 
+@patch("src.executor.windows._shell_launch", return_value=False)
 @patch("os.startfile", side_effect=OSError("Startfile failed"), create=True)
 @patch("subprocess.Popen")
-def test_launch_app_fallback(mock_popen, mock_startfile, executor):
+def test_launch_app_fallback(mock_popen, mock_startfile, _shell, executor):
     """Verify application launching falls back to subprocess with lpDesktop and without shell=True."""
     action = IntentAction(type="launch_app", target="notepad.exe")
     success = executor.launch_app(action)
@@ -74,3 +76,16 @@ def test_launch_app_fallback(mock_popen, mock_startfile, executor):
         assert called_kwargs["startupinfo"].lpDesktop == r"WinSta0\Default"
 
 
+
+
+@patch("os.startfile", create=True)
+@patch("src.executor.windows._shell_launch", return_value=True)
+def test_launch_app_prefers_explorer_shell(mock_shell, mock_startfile, executor):
+    """Existing executables launch via explorer (escapes IDE sandbox); unresolvable ones skip it."""
+    assert executor.launch_app(IntentAction(type="launch_app", target="notepad.exe")) is True
+    assert "notepad" in mock_shell.call_args[0][0].lower()
+    mock_startfile.assert_not_called()
+    mock_shell.reset_mock()
+    executor.launch_app(IntentAction(type="launch_app", target="no_such_app_xyz.exe"))
+    mock_shell.assert_not_called()
+    mock_startfile.assert_called_once()

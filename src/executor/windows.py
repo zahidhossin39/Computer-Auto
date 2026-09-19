@@ -25,6 +25,21 @@ def ensure_default_desktop() -> None:
             pass
 
 
+def _shell_launch(target: str, args: str = "") -> bool:
+    """ShellExecute via the desktop's explorer.exe (Raymond Chen's ShellWindows trick)."""
+    try:
+        import pythoncom
+        import win32com.client
+        pythoncom.CoInitialize()  # launch_app may run on worker threads
+        # CLSID_ShellWindows; SWC_DESKTOP=8, SWFO_NEEDDISPATCH=1
+        windows = win32com.client.Dispatch("{9BA05972-F6A8-11CF-A442-00A0C90A8F39}")
+        desktop = windows.FindWindowSW(pythoncom.Empty, pythoncom.Empty, 8, 0, 1)
+        desktop.Document.Application.ShellExecute(target, args, "", "open", 1)
+        return True
+    except Exception:
+        return False
+
+
 try:
     import win32con
     import win32gui
@@ -171,6 +186,11 @@ class WindowsExecutor:
             # background process when launched from an IDE/terminal. Resolving via shutil.which yields
             # 'C:\Windows\System32\notepad.exe' which reliably opens an interactive visible GUI window.
             resolved_target = shutil.which(target) or target
+
+            # 0. Ask the running explorer.exe to launch it. The child is then parented by explorer,
+            # escaping any IDE sandbox/job/desktop our own process is stuck in.
+            if os.path.isfile(resolved_target) and _shell_launch(resolved_target, " ".join(action.args)):
+                return True
 
             # 1. On Windows, use os.startfile to ensure the process launches
             # onto the user's interactive 'Default' desktop station (WinSta0\Default),
