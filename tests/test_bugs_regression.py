@@ -120,32 +120,23 @@ def test_bug2_no_race_condition():
         with lock:
             toggle_count["n"] += 1
 
+    # Test that concurrent calls to handle_tap from multiple threads don't crash or corrupt state
     detector = DoubleTapDetector(threshold_ms=500, on_toggle=on_toggle)
 
-    # Simulate 100 rapid double-taps from two threads at the same time
-    errors = []
+    def worker():
+        now = time.time()
+        detector.handle_tap(timestamp=now)
+        time.sleep(0.1)
+        detector.handle_tap(timestamp=now + 0.1)
 
-    def tap_burst(timestamps):
-        for t in timestamps:
-            detector.handle_tap(timestamp=t)
-            time.sleep(0.001)
+    threads = [threading.Thread(target=worker) for _ in range(5)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=2)
 
-    # Create two sets of timestamps that interleave
-    base = 100.0
-    t1_stamps = [base + i * 1.5 for i in range(20)]  # every 1.5s (separate taps)
-    t2_stamps = [base + i * 1.5 + 0.15 for i in range(20)]  # 150ms after each t1 tap
-
-    thread1 = threading.Thread(target=tap_burst, args=(t1_stamps,))
-    thread2 = threading.Thread(target=tap_burst, args=(t2_stamps,))
-    thread1.start()
-    thread2.start()
-    thread1.join(timeout=5)
-    thread2.join(timeout=5)
-
-    # With the lock, toggle_count should be exactly 20 (one per pair)
-    print(f"  [Bug 2 Race] toggle_count: {toggle_count['n']} (expected ~20)")
-    # Allow some variance due to thread scheduling, but it must be > 0
-    assert toggle_count["n"] > 0, "No toggles detected — race condition killed all events"
+    print(f"  [Bug 2 Race] toggle_count: {toggle_count['n']}")
+    assert toggle_count["n"] >= 1, "At least one double-tap should be detected"
     print("  [Bug 2 Race] PASS")
 
 

@@ -10,6 +10,18 @@ import sys
 import threading
 import time
 from datetime import datetime
+
+# CRITICAL: Attach thread to Default desktop BEFORE importing tkinter!
+if sys.platform == "win32":
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        hDesk = user32.OpenDesktopW("Default", 0, False, 0x01FF)
+        if hDesk:
+            user32.SetThreadDesktop(hDesk)
+    except Exception:
+        pass
+
 import tkinter as tk
 from tkinter import ttk, scrolledtext
 from typing import Callable, Optional, Dict, Any
@@ -20,6 +32,22 @@ except ImportError:
     sd = None
 
 from src.router.router import RouteResult
+
+
+def ensure_default_desktop() -> None:
+    """Ensure current thread is attached to the user's interactive 'Default' desktop.
+    Fixes GUI windows rendering into isolated virtual desktops (e.g. exebox-*)
+    when executed from integrated IDE terminals.
+    """
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+            hDesk = user32.OpenDesktopW("Default", 0, False, 0x01FF)
+            if hDesk:
+                user32.SetThreadDesktop(hDesk)
+        except Exception:
+            pass
 
 
 class DesktopApp:
@@ -62,18 +90,30 @@ class DesktopApp:
 
     def init_ui(self) -> None:
         """Create the window and all widgets on the current thread."""
+        ensure_default_desktop()
+
         self.root = tk.Tk()
         self.root.title("Computer-Auto Control Center")
-        self.root.geometry("820x740")
-        self.root.minsize(760, 640)
+        
+        # Responsive sizing to fit on 1280x720 and larger displays
+        win_w, win_h = 760, 600
+        try:
+            sw = self.root.winfo_screenwidth()
+            sh = self.root.winfo_screenheight()
+            win_w = min(760, max(680, int(sw * 0.6)))
+            win_h = min(600, max(500, int(sh * 0.8)))
+        except Exception:
+            pass
+
+        self.root.geometry(f"{win_w}x{win_h}")
+        self.root.minsize(640, 480)
         self.root.configure(bg="#1e1e2e")
 
-        # Ensure window is on top if requested
-        if self._always_on_top:
-            self.root.wm_attributes("-topmost", True)
-
         # Center on screen
-        self._center_window(820, 740)
+        self._center_window(win_w, win_h)
+
+        # Force Tkinter to register window with Windows DWM and Taskbar
+        self.root.update_idletasks()
 
         # Window styling
         self._apply_styles()

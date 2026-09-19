@@ -1,7 +1,21 @@
-"""Floating HUD Pill overlay for real-time visual feedback."""
-
 import sys
 import threading
+
+def ensure_default_desktop() -> None:
+    """Ensure current thread is attached to the user's interactive 'Default' desktop."""
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+            hDesk = user32.OpenDesktopW("Default", 0, False, 0x01FF)
+            if hDesk:
+                user32.SetThreadDesktop(hDesk)
+        except Exception:
+            pass
+
+# Attach at import time
+ensure_default_desktop()
+
 import tkinter as tk
 from typing import Callable, Optional
 
@@ -41,6 +55,7 @@ class FloatingHUD:
     def init_ui(self) -> None:
         """Initialize the Tkinter window and widgets. Must be called on the thread
         that will run mainloop()."""
+        ensure_default_desktop()
         self.root = tk.Tk()
         self.root.title("Computer-Auto HUD")
         self.root.overrideredirect(True)

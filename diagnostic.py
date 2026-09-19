@@ -8,9 +8,21 @@ Usage:
   python -u diagnostic.py --hud   # Tests the compact Floating HUD pill
 """
 
-import argparse
 import os
 import sys
+
+# CRITICAL: Attach thread to user's interactive 'Default' desktop BEFORE any GUI/audio/hook imports!
+if sys.platform == "win32":
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        hDesk = user32.OpenDesktopW("Default", 0, False, 0x01FF)
+        if hDesk:
+            user32.SetThreadDesktop(hDesk)
+    except Exception:
+        pass
+
+import argparse
 import threading
 import time
 

@@ -1,7 +1,16 @@
-"""Computer-Auto: Voice-controlled desktop automation daemon with Floating HUD."""
+# CRITICAL: Attach to user's interactive 'Default' desktop BEFORE any GUI/audio/hook imports!
+import sys
+if sys.platform == "win32":
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        hDesk = user32.OpenDesktopW("Default", 0, False, 0x01FF)
+        if hDesk:
+            user32.SetThreadDesktop(hDesk)
+    except Exception:
+        pass
 
 import argparse
-import sys
 import threading
 import time
 import winsound
