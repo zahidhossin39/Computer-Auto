@@ -5,6 +5,9 @@ import re
 from typing import Dict, List, Optional
 from src.config import Intent
 
+# Maximum words allowed around a contained trigger for a containment match.
+MAX_EXTRA_WORDS = 2
+
 
 @dataclass
 class RouteResult:
@@ -50,17 +53,21 @@ class CommandRouter:
                 intent=self._trigger_map[clean_text],
             )
 
-        # 2. Key phrase containment match (ordered by longest trigger first)
+        # 2. Key phrase containment match (ordered by longest trigger first).
+        # Only counts for short utterances: after removing the matched
+        # trigger, at most MAX_EXTRA_WORDS words may remain.
         sorted_triggers = sorted(self._trigger_map.keys(), key=len, reverse=True)
         for trigger in sorted_triggers:
             # Check whole phrase match or word boundary
             pattern = r"\b" + re.escape(trigger) + r"\b"
             if re.search(pattern, clean_text):
-                return RouteResult(
-                    is_vision=False,
-                    command=utterance.strip(),
-                    intent=self._trigger_map[trigger],
-                )
+                remainder = re.sub(pattern, " ", clean_text, count=1)
+                if len(remainder.split()) <= MAX_EXTRA_WORDS:
+                    return RouteResult(
+                        is_vision=False,
+                        command=utterance.strip(),
+                        intent=self._trigger_map[trigger],
+                    )
 
         # 3. Fallback to Tier 2 Vision Agent
         return RouteResult(

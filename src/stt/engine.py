@@ -82,7 +82,7 @@ class SpeechRecognizer:
                 self._gemini_client = None
 
     def _transcribe_gemini(self, samples: np.ndarray, sample_rate: int = 16000) -> str:
-        """Fallback transcription via Gemini 2.5 Flash."""
+        """Fallback transcription via Gemini Flash-Lite."""
         if self._gemini_client is None:
             return ""
         try:
@@ -95,7 +95,7 @@ class SpeechRecognizer:
                 wf.writeframes(int16_samples.tobytes())
 
             resp = self._gemini_client.models.generate_content(
-                model="gemini-2.5-flash",
+                model="gemini-3.5-flash-lite",
                 contents=[
                     types.Part.from_bytes(data=buf.getvalue(), mime_type="audio/wav"),
                     "Transcribe the spoken command in this audio exactly. Return ONLY the transcribed text in lowercase, without quotes, timestamps, or commentary. If silence or unintelligible, return nothing.",

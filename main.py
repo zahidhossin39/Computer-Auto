@@ -59,6 +59,7 @@ class ComputerAutoDaemon:
         "yes", "yeah", "yep", "yup", "confirm", "confirmed", "proceed",
         "do it", "sure", "go ahead", "ok", "okay", "affirmative",
     }
+    MAX_VISION_STEPS = 8  # ponytail: fixed cap per command, make configurable if tasks need more
     CANCEL_WORDS = {
         "no", "nope", "cancel", "abort", "stop", "nevermind", "never mind", "dont", "don't",
     }
@@ -104,6 +105,7 @@ class ComputerAutoDaemon:
         self._listening_lock = threading.Lock()
         self._listening_active = False
         self._pending_confirmation: Optional[str] = None
+        self.continuous = False  # re-arm the mic after every command (UI toggle)
 
         self.hotkey_listener = GlobalHotkeyListener(
             threshold_ms=self.config.double_tap_threshold_ms,
@@ -158,6 +160,14 @@ class ComputerAutoDaemon:
         except Exception:
             pass
 
+    def set_continuous(self, enabled: bool) -> None:
+        """Toggle continuous listening; turning it on starts listening right away."""
+        self.continuous = enabled
+        self.ui_log(f"[CONTINUOUS]: {'ON' if enabled else 'OFF'}")
+        if enabled and not self._listening_active:
+            self.hotkey_listener.detector.is_listening = True
+            self.on_listening_toggle(True)
+
     def on_ui_toggle_click(self) -> None:
         """Invoked when user clicks the microphone button on the floating HUD pill or DesktopApp."""
         new_state = not (self.recorder.is_recording or self.hotkey_listener.detector.is_listening)
@@ -177,7 +187,8 @@ class ComputerAutoDaemon:
             self._listening_active = is_listening
 
         if is_listening:
-            self.play_sound(880, 100)
+            if not self.continuous:  # no beep spam while looping
+                self.play_sound(880, 100)
             print("\n[LISTENING] Recording audio... (Double-tap Left Ctrl or click Stop)")
             self.update_ui(
                 "listening",
@@ -202,7 +213,8 @@ class ComputerAutoDaemon:
                     (self.recorder.last_error or "Unknown audio error")[:45],
                 )
         else:
-            self.play_sound(550, 100)
+            if not self.continuous:
+                self.play_sound(550, 100)
             print("[PROCESSING] Transcribing speech utterance...")
             self.update_ui(
                 "processing",
@@ -214,6 +226,14 @@ class ComputerAutoDaemon:
             threading.Thread(target=self._process_recording_worker, daemon=True).start()
 
     def _process_recording_worker(self) -> None:
+        try:
+            self._transcribe_and_handle()
+        finally:
+            if self.continuous:
+                self.hotkey_listener.detector.is_listening = True
+                self.on_listening_toggle(True)
+
+    def _transcribe_and_handle(self) -> None:
         samples = self.recorder.stop()
 
         if len(samples) == 0:
@@ -238,6 +258,9 @@ class ComputerAutoDaemon:
     def on_panic_key(self) -> None:
         """Invoked when user presses Escape."""
         print("\n[PANIC] Emergency stop triggered! Stopping all actions.")
+        self.continuous = False  # panic always ends the listening loop
+        if hasattr(self.ui, "continuous_var"):
+            self.ui.root.after(0, self.ui.continuous_var.set, False)
         self.recorder.stop()
         self._is_executing = False
         self._pending_confirmation = None
@@ -337,41 +360,40 @@ class ComputerAutoDaemon:
                 self.update_ui("executing", "Vision Agent Planning...", "Analyzing screen with Gemini Flash...")
                 self.ui_log("[TIER 2 VISION]: Routing to Gemini Flash...")
 
-                img, w, h = self.capture.grab_screen()
-                print(f"[SCREEN CAPTURE]: Screen dimensions {w}x{h}")
-                self.ui_log(f"[SCREEN CAPTURE]: Captured {w}x{h}")
+                # Look -> act -> look again, until Gemini says done. Panic clears _is_executing.
+                history: list = []
+                for step in range(1, self.MAX_VISION_STEPS + 1):
+                    if not self._is_executing:
+                        return
+                    img, w, h = self.capture.grab_screen()
+                    action = self.vision.plan_action(utterance, img, history)
+                    print(f"[AGENT STEP {step}]: {action.action} at ({action.x}, {action.y}) | {action.explanation}")
+                    self.ui_log(f"[AGENT STEP {step}]: {action.action} at ({action.x}, {action.y}) -> {action.explanation}")
 
-                action = self.vision.plan_action(utterance, img)
-                print(f"[AGENT PLAN]: Action='{action.action}', Target=({action.x}, {action.y}) | {action.explanation}")
-                self.ui_log(f"[AGENT PLAN]: {action.action} at ({action.x}, {action.y}) -> {action.explanation}")
+                    if action.action == "done":
+                        self.update_ui("ready", "Visual Task Completed", action.explanation[:45])
+                        return
+                    if action.action == "none":
+                        self.update_ui("ready", "Vision Action Failed", action.explanation[:45])
+                        self.ui_log(f"[TIER 2 VISION ERROR]: {action.explanation}")
+                        return
 
-                # If Gemini was unable to plan an action or errored out
-                if action.action == "none":
-                    print(f"[WARNING]: Visual navigation planning failed -> {action.explanation}")
-                    self.update_ui("ready", "Vision Action Failed", action.explanation[:45])
-                    self.ui_log(f"[TIER 2 VISION ERROR]: {action.explanation}")
-                    return
+                    if not confirmed and self.guardrail.requires_confirmation(action.explanation):
+                        warning = self.guardrail.format_confirmation_prompt(action.explanation)
+                        print(f"[GUARDRAIL]: {warning}")
+                        self._pending_confirmation = utterance
+                        self.update_ui("guardrail", "Confirmation Required", "Say 'yes' to confirm or 'no' to cancel")
+                        self.ui_log(f"[GUARDRAIL]: {warning}")
+                        self.tts.speak(warning)
+                        return
 
-                if not confirmed and self.guardrail.requires_confirmation(action.explanation):
-                    warning = self.guardrail.format_confirmation_prompt(action.explanation)
-                    print(f"[GUARDRAIL]: {warning}")
-                    self._pending_confirmation = utterance
-                    self.update_ui("guardrail", "Confirmation Required", "Say 'yes' to confirm or 'no' to cancel")
-                    self.ui_log(f"[GUARDRAIL]: {warning}")
-                    self.tts.speak(warning)
-                    return
+                    self.update_ui("executing", f"Vision step {step}: {action.action}", action.explanation[:45])
+                    ok = self.vision.execute_action(action)
+                    history.append(f"{action.action}: {action.explanation}" + ("" if ok else " (FAILED)"))
+                    time.sleep(1.0)  # let the screen settle before the next look
 
-                self.update_ui("executing", f"Vision: {action.action}", action.explanation[:45])
-
-                success = self.vision.execute_action(action)
-                if success:
-                    print("[EXECUTED]: Visual action completed.")
-                    self.update_ui("ready", "Visual Action Completed", action.explanation[:45])
-                    self.ui_log(f"[EXECUTED]: Visual action completed -> {action.explanation}")
-                else:
-                    print(f"[WARNING]: Visual action could not be executed: {action.explanation}")
-                    self.update_ui("ready", "Action not executable", action.explanation[:45])
-                    self.ui_log(f"[WARNING]: Visual action could not be executed: {action.explanation}")
+                self.update_ui("ready", "Vision stopped", f"Hit {self.MAX_VISION_STEPS}-step limit")
+                self.ui_log(f"[TIER 2 VISION]: Stopped after {self.MAX_VISION_STEPS} steps.")
         finally:
             self._is_executing = False
 

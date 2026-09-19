@@ -63,3 +63,18 @@ def test_unmatched_command_routes_to_vision_agent(router):
         assert res.is_vision is True
         assert res.command == query.strip()
         assert res.intent is None
+
+
+def test_long_sentence_containing_trigger_routes_to_vision(router):
+    """Verify a trigger buried in a long sentence falls through to vision."""
+    res = router.route("choose an account from open browser and")
+    assert res.is_vision is True
+    assert res.intent is None
+
+
+def test_short_command_with_extra_words_still_matches(router):
+    """Verify short utterances with extra words around a trigger still route."""
+    res = router.route("please open notepad")
+    assert res.is_vision is False
+    assert res.intent is not None
+    assert res.intent.name == "launch_notepad"

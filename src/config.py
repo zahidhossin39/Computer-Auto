@@ -31,7 +31,7 @@ class AppConfig:
     sample_rate: int = 16000
     stt_provider: str = "sherpa-onnx"
     stt_model_dir: str = "models/parakeet-tdt-0.6b-int8"
-    gemini_model: str = "gemini-2.5-flash"  # Flash model for vision reasoning
+    gemini_model: str = "gemini-3.5-flash-lite"  # Flash model for vision reasoning
 
 
 def load_intents(config_path: Optional[Path] = None) -> List[Intent]:
