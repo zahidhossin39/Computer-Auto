@@ -168,3 +168,16 @@ def test_vision_loop_runs_until_done():
     daemon.handle_command("choose an account from open browser and")
     assert daemon.vision.plan_action.call_count == 2
     assert daemon.vision.plan_action.call_args[0][2] == ["click: step one"]
+
+
+def test_vision_loop_stops_when_action_has_no_effect():
+    """The same action three times means the screen is not responding: stop instead of looping."""
+    from src.vision.agent import VisionAction
+    daemon = _make_daemon()
+    daemon.capture = MagicMock()
+    daemon.capture.grab_screen.return_value = (MagicMock(), 100, 100)
+    daemon.vision = MagicMock()
+    daemon.vision.plan_action.return_value = VisionAction(action="type", text="hi", explanation="type hi")
+    daemon.vision.execute_action.return_value = True
+    daemon.handle_command("type hi everywhere")
+    assert daemon.vision.plan_action.call_count == 3  # not the 8-step ceiling

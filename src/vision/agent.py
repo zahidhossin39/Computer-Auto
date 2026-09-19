@@ -32,6 +32,7 @@ class VisionAction:
     y: Optional[int] = None
     text: Optional[str] = None
     keys: List[str] = field(default_factory=list)
+    submit: bool = False  # press Enter after typing
     explanation: str = ""
 
 
@@ -39,6 +40,13 @@ SYSTEM_PROMPT = """You are a desktop GUI automation agent working step by step.
 You get the user request, the steps already taken, and a fresh screenshot of the screen.
 Decide the ONE next action that moves the task forward. When the screenshot shows the task
 is complete, answer "done". If the task is impossible, answer "none".
+
+You ARE the assistant carrying out the request: never wait for an assistant, app or window to
+act for you, and never click the app that is running you. Use "wait" only for a page that is
+still loading. If a step you already took did not change the screen, do something different
+instead of repeating it: a keyboard action ("hotkey") is often more reliable than a click, and
+a "type" action may also carry the "element" of the field to type into (it is clicked first)
+and "submit": true to press Enter afterwards, so a search is ONE action, not three.
 
 Clickable elements are marked on the screenshot with red numbered boxes and listed as
 "[number] Kind 'Name'". For a click, answer with that number in "element". Only if the thing
@@ -50,6 +58,7 @@ You MUST respond strictly with valid JSON conforming to this schema:
   "element": integer (number of the marked element to click),
   "target": string (visual description, only when no marked element fits),
   "text": string (text to type, if action is type),
+  "submit": true/false (press Enter after typing, e.g. to run a search),
   "keys": list of strings (keys to press, e.g. ["ctrl", "c"]),
   "explanation": string (brief explanation of what you are clicking/doing)
 }
@@ -173,7 +182,7 @@ class VisionAgent:
             data = self._ask(image, prompt, SYSTEM_PROMPT)
             x = y = None
             n = data.get("element")
-            if data.get("action") == "click" and isinstance(n, int) and 1 <= n <= len(elements):
+            if data.get("action") in ("click", "type") and isinstance(n, int) and 1 <= n <= len(elements):
                 x, y = elements[n - 1].center
             elif data.get("action") == "click" and data.get("target"):
                 x, y = self._locate(data["target"], image, crop.size)
@@ -183,6 +192,7 @@ class VisionAgent:
                 x=x,
                 y=y,
                 text=data.get("text"),
+                submit=bool(data.get("submit")),
                 keys=data.get("keys") or [],
                 explanation=data.get("explanation", ""),
             )
@@ -203,7 +213,11 @@ class VisionAgent:
                 pyautogui.click(action.x, action.y)
                 return True
             elif action.action == "type" and action.text:
-                pyautogui.write(action.text)
+                if action.x is not None and action.y is not None:
+                    pyautogui.click(action.x, action.y)  # focus the field first
+                pyautogui.write(action.text, interval=0.01)
+                if action.submit:
+                    pyautogui.press("enter")
                 return True
             elif action.action == "hotkey" and action.keys:
                 pyautogui.hotkey(*action.keys)

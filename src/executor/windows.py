@@ -56,6 +56,13 @@ VK_VOLUME_UP = 0xAF
 VK_MEDIA_NEXT_TRACK = 0xB0
 VK_MEDIA_PREV_TRACK = 0xB1
 VK_MEDIA_PLAY_PAUSE = 0xB3
+VK_BACK = 0x08
+VK_TAB = 0x09
+VK_RETURN = 0x0D
+VK_ESCAPE = 0x1B
+VK_PRIOR = 0x21
+VK_NEXT = 0x22
+VK_DELETE = 0x2E
 KEYEVENTF_EXTENDEDKEY = 0x0001
 KEYEVENTF_KEYUP = 0x0002
 
@@ -186,6 +193,29 @@ class WindowsExecutor:
         # System Lock
         elif command == "system_lock":
             ctypes.windll.user32.LockWorkStation()
+            return True
+
+        # Key Presses
+        elif command == "key_enter":
+            self._send_vk_code(VK_RETURN)
+            return True
+        elif command == "key_escape":
+            self._send_vk_code(VK_ESCAPE)
+            return True
+        elif command == "key_tab":
+            self._send_vk_code(VK_TAB)
+            return True
+        elif command == "key_backspace":
+            self._send_vk_code(VK_BACK)
+            return True
+        elif command == "key_delete":
+            self._send_vk_code(VK_DELETE)
+            return True
+        elif command == "key_page_down":
+            self._send_vk_code(VK_NEXT)
+            return True
+        elif command == "key_page_up":
+            self._send_vk_code(VK_PRIOR)
             return True
 
         return False

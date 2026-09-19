@@ -187,3 +187,73 @@ intents:
       type: system_action
       command: system_lock
     is_destructive: false
+
+  # Key Presses
+  - name: press_enter
+    category: system
+    triggers:
+      - "press enter"
+      - "hit enter"
+      - "click enter"
+      - "enter key"
+    action:
+      type: system_action
+      command: key_enter
+
+  - name: press_escape
+    category: system
+    triggers:
+      - "press escape"
+      - "hit escape"
+      - "escape key"
+    action:
+      type: system_action
+      command: key_escape
+
+  - name: press_tab
+    category: system
+    triggers:
+      - "press tab"
+      - "hit tab"
+      - "tab key"
+    action:
+      type: system_action
+      command: key_tab
+
+  - name: press_backspace
+    category: system
+    triggers:
+      - "press backspace"
+      - "hit backspace"
+      - "backspace"
+    action:
+      type: system_action
+      command: key_backspace
+
+  - name: press_delete
+    category: system
+    triggers:
+      - "press delete"
+      - "hit delete"
+      - "delete key"
+    action:
+      type: system_action
+      command: key_delete
+
+  - name: press_page_down
+    category: system
+    triggers:
+      - "page down"
+      - "scroll down page"
+    action:
+      type: system_action
+      command: key_page_down
+
+  - name: press_page_up
+    category: system
+    triggers:
+      - "page up"
+      - "scroll up page"
+    action:
+      type: system_action
+      command: key_page_up

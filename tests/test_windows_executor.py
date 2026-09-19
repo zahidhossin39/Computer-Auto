@@ -119,3 +119,11 @@ def test_get_active_window_skips_own_control_center(executor):
     ):
         assert executor._get_active_window() == other_hwnd
     mock_gui.GetWindow.assert_called_with(own_hwnd, mock_con.GW_HWNDNEXT)
+
+
+@patch("src.executor.windows.WindowsExecutor._send_vk_code")
+def test_key_enter_action(mock_vk, executor):
+    """Verify key_enter sends VK_RETURN and reports success."""
+    success = executor.execute_system_action("key_enter")
+    mock_vk.assert_called_with(0x0D)
+    assert success is True

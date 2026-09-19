@@ -143,6 +143,14 @@ class ComputerAutoDaemon:
             self.hotkey_listener.detector.is_listening = False
             self.on_listening_toggle(False)
 
+    def _set_ui_visible(self, visible: bool) -> None:
+        """Hide/show our own window so it never appears in the screenshot the agent plans from."""
+        root = getattr(self.ui, "root", None)
+        if root is None:
+            return
+        root.after(0, root.deiconify if visible else root.withdraw)
+        time.sleep(0.25)  # let the compositor actually remove/redraw the window
+
     def update_ui(self, state: str, message: str, detail: str = "") -> None:
         """Thread-safe UI status update dispatching to active UI."""
         if self.ui:
@@ -360,8 +368,13 @@ class ComputerAutoDaemon:
                 self.update_ui("executing", "Vision Agent Planning...", "Analyzing screen with vision model...")
                 self.ui_log("[TIER 2 VISION]: Routing to vision model...")
 
+                # Our Control Center is always-on-top: in the screenshot it covered the
+                # target window, and the model kept "waiting for Computer-Auto to finish".
+                self._set_ui_visible(False)
                 # Look -> act -> look again, until the model says done. Panic clears _is_executing.
                 history: list = []
+                last_sig = None
+                repeats = 0
                 for step in range(1, self.MAX_VISION_STEPS + 1):
                     if not self._is_executing:
                         return
@@ -388,6 +401,16 @@ class ComputerAutoDaemon:
                         self.tts.speak(warning)
                         return
 
+                    # typing has no coordinates of its own, so compare it by its text
+                    sig = (action.action, action.text) if action.action == "type" else (action.action, action.x, action.y)
+                    repeats = repeats + 1 if sig == last_sig else 0
+                    last_sig = sig
+                    if repeats >= 2:  # same action 3x: the screen is not responding to it
+                        print("[TIER 2 VISION]: same action had no effect, stopping.")
+                        self.update_ui("ready", "Stopped: action had no effect", action.explanation[:45])
+                        self.ui_log("[TIER 2 VISION]: Same action repeated with no effect -> stopped.")
+                        return
+
                     self.update_ui("executing", f"Vision step {step}: {action.action}", action.explanation[:45])
                     ok = self.vision.execute_action(action)
                     history.append(f"{action.action}: {action.explanation}" + ("" if ok else " (FAILED)"))
@@ -396,6 +419,7 @@ class ComputerAutoDaemon:
                 self.update_ui("ready", "Vision stopped", f"Hit {self.MAX_VISION_STEPS}-step limit")
                 self.ui_log(f"[TIER 2 VISION]: Stopped after {self.MAX_VISION_STEPS} steps.")
         finally:
+            self._set_ui_visible(True)
             self._is_executing = False
 
 

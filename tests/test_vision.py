@@ -37,7 +37,7 @@ def test_execute_type_action(mock_write, agent):
     success = agent.execute_action(action)
 
     assert success is True
-    mock_write.assert_called_once_with("hello world")
+    mock_write.assert_called_once_with("hello world", interval=0.01)
 
 
 def test_destructive_vision_action_is_intercepted(agent):
@@ -61,3 +61,14 @@ def test_marked_element_click_uses_exact_rect():
          patch("src.jev.choose", return_value=("1", 0.95)):
         a = agent.plan_action("click A", img)  # confident Jev pick: no vision call needed
     assert (a.x, a.y) == (5, 5)
+
+
+@patch("pyautogui.press")
+@patch("pyautogui.write")
+@patch("pyautogui.click")
+def test_type_into_field_clicks_then_types_then_submits(mock_click, mock_write, mock_press, agent):
+    """One 'type' action can focus a field, type, and press Enter: a search in one step."""
+    agent.execute_action(VisionAction(action="type", x=50, y=60, text="linkedin", submit=True))
+    mock_click.assert_called_once_with(50, 60)
+    mock_write.assert_called_once_with("linkedin", interval=0.01)
+    mock_press.assert_called_once_with("enter")
