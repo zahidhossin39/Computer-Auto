@@ -74,7 +74,7 @@ class DesktopApp:
         # State tracking
         self.current_state = "ready"
         self.current_message = "Ready — Double-tap Left Ctrl or click Start to speak"
-        self.current_detail = "Parakeet STT (Offline) + Gemini Flash Vision active"
+        self.current_detail = "Parakeet STT (Offline) + OpenRouter Vision active"
 
         # UI Widget references
         self._status_badge = None
@@ -475,7 +475,7 @@ class DesktopApp:
         self._device_combo.pack(fill="x", pady=(4, 0))
         self._device_combo.bind("<<ComboboxSelected>>", self._on_device_selected)
 
-        # Right Card: Vision & Gemini Status
+        # Right Card: Vision status
         vision_card = tk.Frame(
             row_frame,
             bg="#181825",
@@ -491,7 +491,7 @@ class DesktopApp:
 
         tk.Label(
             v_top,
-            text="Tier 2 Gemini Vision",
+            text="Tier 2 Vision (OpenRouter)",
             font=("Segoe UI", 9, "bold"),
             fg="#cdd6f4",
             bg="#181825",
@@ -512,13 +512,13 @@ class DesktopApp:
         )
         test_cap_btn.pack(side="right")
 
-        has_key = bool(os.environ.get("GEMINI_API_KEY"))
-        key_status = "Gemini Flash Ready" if has_key else "GEMINI_API_KEY Missing"
+        has_key = bool(os.environ.get("OPENROUTER_API_KEY"))
+        key_status = "OpenRouter Ready" if has_key else "OPENROUTER_API_KEY Missing"
         key_color = "#a6e3a1" if has_key else "#f38ba8"
 
         self._gemini_badge = tk.Label(
             vision_card,
-            text=f"Status: {key_status} (gemini-3.5-flash-lite)",
+            text=f"Status: {key_status} (Qwen3-VL)",
             font=("Segoe UI", 8),
             fg=key_color,
             bg="#181825",

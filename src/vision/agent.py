@@ -1,12 +1,15 @@
-"""Tier 2 Vision Agent powered by Google Gemini Flash for GUI navigation."""
+"""Tier 2 Vision Agent: a vision model on OpenRouter plans GUI actions from screenshots."""
 
+import base64
 from dataclasses import dataclass, field
 import io
 import json
 import os
+import re
 from typing import List, Optional
 from PIL import Image
 import pyautogui
+import requests
 
 from src.executor.guardrail import SafetyGuardrail
 
@@ -16,12 +19,7 @@ try:
 except ImportError:
     pass
 
-try:
-    from google import genai
-    from google.genai import types
-except ImportError:
-    genai = None
-    types = None
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 
 @dataclass
@@ -53,45 +51,52 @@ You MUST respond strictly with valid JSON conforming to this schema:
 """
 
 
-def _to_jpeg(img: Image.Image):
-    """JPEG is ~3x smaller than the default PNG upload, which dominated call latency."""
+def _to_data_url(img: Image.Image) -> str:
+    """JPEG is ~3x smaller than PNG; upload size dominated call latency."""
     buf = io.BytesIO()
     img.convert("RGB").save(buf, "JPEG", quality=85)
-    return types.Part.from_bytes(data=buf.getvalue(), mime_type="image/jpeg")
+    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
 
 
-class GeminiVisionAgent:
-    """Uses Google Gemini Flash to visually inspect screenshots and execute actions."""
+def _parse_json(text: str) -> dict:
+    """Models sometimes wrap JSON in prose or code fences; take the outermost object."""
+    return json.loads(re.search(r"[{].*[}]", text, re.S).group(0))
+
+
+class VisionAgent:
+    """Plans one GUI action at a time from a screenshot via an OpenRouter vision model."""
 
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model_name: str = "gemini-3.5-flash-lite",
+        model_name: str = "qwen/qwen3-vl-8b-instruct",
         mock_mode: bool = False,
     ):
-        self.api_key = api_key or os.environ.get("GEMINI_API_KEY")
+        self.api_key = api_key or os.environ.get("OPENROUTER_API_KEY")
         self.model_name = model_name
-        self.mock_mode = mock_mode
+        self.mock_mode = mock_mode or not self.api_key
         self.guardrail = SafetyGuardrail()
-        self._client = None
 
-        if not self.mock_mode and self.api_key and genai is not None:
-            try:
-                # Free tier has a low requests-per-minute cap: on 429 wait and retry instead of failing
-                self._client = genai.Client(
-                    api_key=self.api_key,
-                    http_options=types.HttpOptions(retry_options=types.HttpRetryOptions(
-                        attempts=4, initial_delay=5, max_delay=30, http_status_codes=[429, 503],
-                    )),
-                )
-            except Exception:
-                self._client = None
+    def _ask(self, image_url: str, text: str, system: str = "") -> dict:
+        messages = [{"role": "system", "content": system}] if system else []
+        messages.append({"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": image_url}},
+            {"type": "text", "text": text},
+        ]})
+        r = requests.post(
+            OPENROUTER_URL,
+            headers={"Authorization": f"Bearer {self.api_key}"},
+            json={"model": self.model_name, "messages": messages, "temperature": 0},
+            timeout=60,
+        )
+        r.raise_for_status()
+        return _parse_json(r.json()["choices"][0]["message"]["content"])
 
     def plan_action(
         self, user_command: str, screenshot: Image.Image, history: Optional[List[str]] = None
     ) -> VisionAction:
-        """Analyze screenshot with Gemini Flash and return structured action."""
-        if self.mock_mode or self._client is None:
+        """Ask the model for the next single action toward the user's request."""
+        if self.mock_mode:
             return VisionAction(
                 action="click",
                 x=screenshot.width // 2,
@@ -99,22 +104,12 @@ class GeminiVisionAgent:
                 explanation="Mock center click",
             )
 
-        image = _to_jpeg(screenshot)
+        image = _to_data_url(screenshot)
         steps = "\n".join(f"{i}. {h}" for i, h in enumerate(history or [], 1)) or "(none yet)"
         prompt = f"User Request: {user_command}\nSteps already taken:\n{steps}"
 
         try:
-            config = types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
-                response_mime_type="application/json",
-                temperature=0.1,
-            )
-            response = self._client.models.generate_content(
-                model=self.model_name,
-                contents=[image, prompt],
-                config=config,
-            )
-            data = json.loads(response.text)
+            data = self._ask(image, prompt, SYSTEM_PROMPT)
             x = y = None
             if data.get("action") == "click" and data.get("target"):
                 x, y = self._locate(data["target"], image, screenshot.size)
@@ -123,31 +118,18 @@ class GeminiVisionAgent:
                 x=x,
                 y=y,
                 text=data.get("text"),
-                keys=data.get("keys", []),
+                keys=data.get("keys") or [],
                 explanation=data.get("explanation", ""),
             )
         except Exception as e:
-            return VisionAction(
-                action="none",
-                explanation=f"Error calling Gemini Vision API: {e}",
-            )
+            return VisionAction(action="none", explanation=f"Vision API error: {e}")
 
-    def _locate(self, target: str, image, size) -> tuple:
-        """Second call: pure grounding. Gemini is trained on box_2d detection, which is far
-        more accurate than asking the planner for coordinates directly."""
-        response = self._client.models.generate_content(
-            model=self.model_name,
-            contents=[image, f'Return JSON {{"box_2d": [ymin, xmin, ymax, xmax]}} '
-                                  f"normalized 0-1000 for: {target}"],
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json", temperature=0,
-            ),
-        )
-        data = json.loads(response.text)
-        data = data[0] if isinstance(data, list) else data
-        y0, x0, y1, x1 = data["box_2d"]
-        return (round((x0 + x1) / 2 * size[0] / 1000),
-                round((y0 + y1) / 2 * size[1] / 1000))
+    def _locate(self, target: str, image_url: str, size) -> tuple:
+        """Second call: pure grounding. Asking the planner for coordinates directly was
+        inaccurate; a dedicated "find this element" call measured 3/3 on the taskbar."""
+        d = self._ask(image_url, 'Return only JSON {"x": int, "y": int}: the center of '
+                                 f"{target}, with coordinates normalized to 0-1000 over the image.")
+        return round(d["x"] * size[0] / 1000), round(d["y"] * size[1] / 1000)
 
     def execute_action(self, action: VisionAction) -> bool:
         """Execute the planned visual action via PyAutoGUI."""

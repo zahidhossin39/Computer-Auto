@@ -31,7 +31,7 @@ class AppConfig:
     sample_rate: int = 16000
     stt_provider: str = "sherpa-onnx"
     stt_model_dir: str = "models/parakeet-tdt-0.6b-int8"
-    gemini_model: str = "gemini-3.5-flash-lite"  # Flash model for vision reasoning
+    vision_model: str = "qwen/qwen3-vl-8b-instruct"  # OpenRouter vision model (tested: accurate, ~$0.0003/call)
 
 
 def load_intents(config_path: Optional[Path] = None) -> List[Intent]:

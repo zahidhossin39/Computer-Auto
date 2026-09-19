@@ -21,3 +21,4 @@ pyyaml>=6.0.1
 # Testing & Dev
 pytest>=8.0.0
 pytest-mock>=3.12.0
+requests>=2.31

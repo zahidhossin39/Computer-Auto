@@ -3,12 +3,12 @@
 from unittest.mock import Mock, patch
 from PIL import Image
 import pytest
-from src.vision.agent import GeminiVisionAgent, VisionAction
+from src.vision.agent import VisionAgent, VisionAction
 
 
 @pytest.fixture
 def agent():
-    return GeminiVisionAgent(api_key="fake-test-key", mock_mode=True)
+    return VisionAgent(api_key="fake-test-key", mock_mode=True)
 
 
 def test_mock_vision_action_generation(agent):

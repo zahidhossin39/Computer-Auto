@@ -45,7 +45,7 @@ from src.router.router import CommandRouter
 from src.executor.windows import WindowsExecutor
 from src.executor.guardrail import SafetyGuardrail
 from src.vision.capture import ScreenCapture
-from src.vision.agent import GeminiVisionAgent
+from src.vision.agent import VisionAgent
 from src.tts.piper import VoiceFeedback
 from src.ui.hud import FloatingHUD
 from src.ui.app import DesktopApp
@@ -97,8 +97,8 @@ class ComputerAutoDaemon:
         self.executor = WindowsExecutor()
         self.guardrail = SafetyGuardrail()
         self.capture = ScreenCapture()
-        self.vision = GeminiVisionAgent(
-            model_name=self.config.gemini_model, mock_mode=mock_vision
+        self.vision = VisionAgent(
+            model_name=self.config.vision_model, mock_mode=mock_vision
         )
         self.tts = VoiceFeedback()
         self._is_executing = False
@@ -354,13 +354,13 @@ class ComputerAutoDaemon:
 
                 self.update_ui("ready", f"Executed: {intent.name}", f"\"{utterance}\"")
 
-            # 2. Tier 2: Unscripted Visual Navigation via Gemini Flash
+            # 2. Tier 2: Unscripted Visual Navigation via vision model
             else:
-                print("[TIER 2 VISION]: Unscripted command -> routing to Gemini Flash...")
-                self.update_ui("executing", "Vision Agent Planning...", "Analyzing screen with Gemini Flash...")
-                self.ui_log("[TIER 2 VISION]: Routing to Gemini Flash...")
+                print("[TIER 2 VISION]: Unscripted command -> routing to vision model...")
+                self.update_ui("executing", "Vision Agent Planning...", "Analyzing screen with vision model...")
+                self.ui_log("[TIER 2 VISION]: Routing to vision model...")
 
-                # Look -> act -> look again, until Gemini says done. Panic clears _is_executing.
+                # Look -> act -> look again, until the model says done. Panic clears _is_executing.
                 history: list = []
                 for step in range(1, self.MAX_VISION_STEPS + 1):
                     if not self._is_executing:
@@ -450,7 +450,7 @@ def main():
         "--mock-stt", action="store_true", help="Use mock STT engine without loading weights"
     )
     parser.add_argument(
-        "--mock-vision", action="store_true", help="Use mock vision agent without calling Gemini API"
+        "--mock-vision", action="store_true", help="Use mock vision agent without calling the vision API"
     )
     parser.add_argument(
         "--hud", action="store_true", help="Use mini floating HUD pill instead of Desktop Control Center"

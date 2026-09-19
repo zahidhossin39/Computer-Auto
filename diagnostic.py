@@ -48,7 +48,7 @@ from src.ui.hud import FloatingHUD
 from src.ui.app import DesktopApp
 from src.stt.engine import SpeechRecognizer
 from src.vision.capture import ScreenCapture
-from src.vision.agent import GeminiVisionAgent
+from src.vision.agent import VisionAgent
 
 
 def run_subsystem_checks():
@@ -86,12 +86,12 @@ def run_subsystem_checks():
     else:
         checks.append(("Parakeet STT INT8", "WARN", f"Missing model weights: {missing}"))
 
-    # 4. Gemini API Key
-    gemini_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    # 4. OpenRouter API Key (vision agent)
+    gemini_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
     if gemini_key:
-        checks.append(("Gemini Flash API Key", "OK", f"Configured in .env (len: {len(gemini_key)})"))
+        checks.append(("OpenRouter API Key", "OK", f"Configured in .env (len: {len(gemini_key)})"))
     else:
-        checks.append(("Gemini Flash API Key", "WARN", "GEMINI_API_KEY not found in .env"))
+        checks.append(("OpenRouter API Key", "WARN", "OPENROUTER_API_KEY not found in .env"))
 
     # 5. Screen Capture
     try:

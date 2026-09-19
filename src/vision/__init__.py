@@ -1,5 +1,5 @@
 """Vision agent package."""
 from .capture import ScreenCapture
-from .agent import GeminiVisionAgent, VisionAction
+from .agent import VisionAgent, VisionAction
 
-__all__ = ["ScreenCapture", "GeminiVisionAgent", "VisionAction"]
+__all__ = ["ScreenCapture", "VisionAgent", "VisionAction"]
