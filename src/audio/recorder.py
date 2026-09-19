@@ -24,6 +24,8 @@ class AudioRecorder:
         self._stream: Optional[sd.InputStream] = None
         self._lock = threading.Lock()
         self.last_error: Optional[str] = None
+        # Bumped on every start(); stale VAD callbacks from a prior session check it
+        self._generation = 0
 
         # Voice Activity Detection (VAD) / Silence Auto-Stop
         self.on_silence: Optional[Callable[[], None]] = None
@@ -98,7 +100,14 @@ class AudioRecorder:
         if self.on_silence and self.is_recording:
             cb = self.on_silence
             self.on_silence = None  # Prevent repeated triggers
-            threading.Thread(target=cb, daemon=True).start()
+            gen = self._generation
+
+            def _fire():
+                # Suppress stale callbacks if a new recording session started meanwhile
+                if self._generation == gen:
+                    cb()
+
+            threading.Thread(target=_fire, daemon=True).start()
 
     def feed_audio_chunk(self, chunk: np.ndarray) -> None:
         """Inject an audio chunk manually (used for tests or external streams)."""
@@ -120,6 +129,7 @@ class AudioRecorder:
         self._speech_detected = False
         self._silence_start_time = 0.0
         self._recording_start_time = time.time()
+        self._generation += 1
 
         with self._lock:
             self._buffer.clear()
@@ -206,14 +216,20 @@ class AudioRecorder:
         """Stop capturing and return concatenated float32 audio samples resampled to self.sample_rate."""
         with self._lock:
             self.is_recording = False
-            if self._stream is not None:
-                try:
-                    self._stream.stop()
-                    self._stream.close()
-                except Exception:
-                    pass
-                self._stream = None
+            stream = self._stream
+            self._stream = None
 
+        # Stop/close the stream OUTSIDE the lock: PortAudio may wait for an in-flight
+        # audio callback to finish, and the callback needs _lock to append samples.
+        # Holding _lock across stream.stop() can therefore deadlock.
+        if stream is not None:
+            try:
+                stream.stop()
+                stream.close()
+            except Exception:
+                pass
+
+        with self._lock:
             if not self._buffer:
                 return np.empty(0, dtype=np.float32)
 

@@ -449,12 +449,26 @@ class DesktopApp:
             audio_card, values=devices, state="readonly", font=("Segoe UI", 8)
         )
         if devices:
-            # Default to device [1] (USB mic) if available, else first device
+            # Prefer the recorder's already-configured device (e.g. from
+            # AUDIO_DEVICE_INDEX); otherwise default to device [1] (USB mic)
+            # if available, else the first device.
             default_idx = 0
-            for i, d in enumerate(devices):
-                if d.startswith("[1]"):
-                    default_idx = i
-                    break
+            preferred = None
+            if self.daemon is not None:
+                preferred = getattr(getattr(self.daemon, "recorder", None), "device_index", None)
+                if not isinstance(preferred, int):
+                    preferred = None
+            if preferred is not None:
+                prefix = f"[{preferred}]"
+                for i, d in enumerate(devices):
+                    if d.startswith(prefix):
+                        default_idx = i
+                        break
+            else:
+                for i, d in enumerate(devices):
+                    if d.startswith("[1]"):
+                        default_idx = i
+                        break
             self._device_combo.current(default_idx)
             # Immediately sync recorder device index
             self._apply_device_index(devices[default_idx])

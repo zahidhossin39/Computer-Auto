@@ -11,6 +11,7 @@ if sys.platform == "win32":
         pass
 
 import argparse
+import re
 import threading
 import time
 import winsound
@@ -53,6 +54,15 @@ from src.ui.app import DesktopApp
 class ComputerAutoDaemon:
     """Central daemon tying hotkeys, UI control center, speech, routing, and execution together."""
 
+    # Spoken/typed replies that resolve a pending guardrail confirmation
+    CONFIRM_WORDS = {
+        "yes", "yeah", "yep", "yup", "confirm", "confirmed", "proceed",
+        "do it", "sure", "go ahead", "ok", "okay", "affirmative",
+    }
+    CANCEL_WORDS = {
+        "no", "nope", "cancel", "abort", "stop", "nevermind", "never mind", "dont", "don't",
+    }
+
     def __init__(
         self,
         mock_stt: bool = False,
@@ -91,6 +101,9 @@ class ComputerAutoDaemon:
         )
         self.tts = VoiceFeedback()
         self._is_executing = False
+        self._listening_lock = threading.Lock()
+        self._listening_active = False
+        self._pending_confirmation: Optional[str] = None
 
         self.hotkey_listener = GlobalHotkeyListener(
             threshold_ms=self.config.double_tap_threshold_ms,
@@ -153,7 +166,16 @@ class ComputerAutoDaemon:
 
     def on_listening_toggle(self, is_listening: bool) -> None:
 
-        """Invoked when listening state changes (via hotkey or UI click)."""
+        """Invoked when listening state changes (via hotkey or UI click).
+
+        Idempotent: duplicate toggles (e.g. VAD auto-stop racing a manual
+        double-tap stop) are ignored so only one transcription worker runs.
+        """
+        with self._listening_lock:
+            if is_listening == self._listening_active:
+                return
+            self._listening_active = is_listening
+
         if is_listening:
             self.play_sound(880, 100)
             print("\n[LISTENING] Recording audio... (Double-tap Left Ctrl or click Stop)")
@@ -168,6 +190,17 @@ class ComputerAutoDaemon:
             if self.recorder.last_error:
                 print(f"[AUDIO WARNING]: {self.recorder.last_error}")
                 self.ui_log(f"[AUDIO WARNING]: {self.recorder.last_error}")
+            if not self.recorder.is_recording:
+                # Mic failed to open: revert listening state so the next
+                # double-tap/click starts cleanly instead of toggling the wrong way.
+                with self._listening_lock:
+                    self._listening_active = False
+                self.hotkey_listener.detector.is_listening = False
+                self.update_ui(
+                    "error",
+                    "Microphone failed to start",
+                    (self.recorder.last_error or "Unknown audio error")[:45],
+                )
         else:
             self.play_sound(550, 100)
             print("[PROCESSING] Transcribing speech utterance...")
@@ -207,12 +240,25 @@ class ComputerAutoDaemon:
         print("\n[PANIC] Emergency stop triggered! Stopping all actions.")
         self.recorder.stop()
         self._is_executing = False
+        self._pending_confirmation = None
+        with self._listening_lock:
+            self._listening_active = False
+        # Keep the hotkey detector in sync even when panic came from the UI,
+        # otherwise the next double-tap toggles the wrong direction.
+        self.hotkey_listener.detector.is_listening = False
+        self.hotkey_listener.detector.last_tap_time = 0.0
         self.play_sound(400, 200)
         self.update_ui("ready", "Aborted (Panic Key)", "Action halted")
         self.ui_log("[PANIC]: Emergency stop triggered via Escape key.")
 
-    def handle_command(self, utterance: str) -> None:
-        """Process transcribed speech or typed command."""
+    def handle_command(self, utterance: str, confirmed: bool = False) -> None:
+        """Process transcribed speech or typed command.
+
+        A guardrail interception parks the utterance in _pending_confirmation;
+        a follow-up "yes"/"confirm" re-enters here with confirmed=True, and
+        "no"/"cancel" drops it. This makes destructive intents (e.g. close
+        window) actually completable instead of a dead end.
+        """
         if self._is_executing:
             print(f"[BUSY]: Action in progress, skipping \"{utterance}\"")
             self.ui_log(f"[BUSY]: Action in progress, please wait...")
@@ -220,6 +266,27 @@ class ComputerAutoDaemon:
 
         self._is_executing = True
         try:
+            # Resolve any pending guardrail confirmation first
+            if self._pending_confirmation is not None and not confirmed:
+                norm = " ".join(re.sub(r"[^\w\s]", "", utterance).lower().split())
+                if norm in self.CONFIRM_WORDS:
+                    pending = self._pending_confirmation
+                    self._pending_confirmation = None
+                    print(f"[GUARDRAIL]: Confirmed -> executing \"{pending}\"")
+                    self.ui_log(f"[GUARDRAIL]: Confirmed -> executing \"{pending}\"")
+                    utterance = pending
+                    confirmed = True
+                elif norm in self.CANCEL_WORDS:
+                    self._pending_confirmation = None
+                    print("[GUARDRAIL]: User cancelled the pending action.")
+                    self.update_ui("ready", "Action cancelled", "Confirmation declined")
+                    self.ui_log("[GUARDRAIL]: User cancelled the pending action.")
+                    self.tts.speak("Action cancelled.")
+                    return
+                else:
+                    # A different command supersedes the pending confirmation
+                    self._pending_confirmation = None
+
             print(f"[UTTERANCE]: \"{utterance}\"")
             self.update_ui("processing", f"Routing: \"{utterance}\"", "Classifying intent...")
             self.ui_log(f"[COMMAND]: Processing \"{utterance}\"")
@@ -233,10 +300,11 @@ class ComputerAutoDaemon:
                 self.ui_log(f"[TIER 1 ROUTER]: Matched intent '{intent.name}' ({intent.category})")
 
                 # Check Guardrails
-                if self.guardrail.requires_confirmation(utterance, intent.is_destructive):
+                if not confirmed and self.guardrail.requires_confirmation(utterance, intent.is_destructive):
                     warning = self.guardrail.format_confirmation_prompt(utterance)
                     print(f"[GUARDRAIL]: {warning}")
-                    self.update_ui("guardrail", "Confirmation Required", warning)
+                    self._pending_confirmation = utterance
+                    self.update_ui("guardrail", "Confirmation Required", "Say 'yes' to confirm or 'no' to cancel")
                     self.ui_log(f"[GUARDRAIL]: {warning}")
                     self.tts.speak(warning)
                     return
@@ -284,10 +352,11 @@ class ComputerAutoDaemon:
                     self.ui_log(f"[TIER 2 VISION ERROR]: {action.explanation}")
                     return
 
-                if self.guardrail.requires_confirmation(action.explanation):
+                if not confirmed and self.guardrail.requires_confirmation(action.explanation):
                     warning = self.guardrail.format_confirmation_prompt(action.explanation)
                     print(f"[GUARDRAIL]: {warning}")
-                    self.update_ui("guardrail", "Confirmation Required", warning)
+                    self._pending_confirmation = utterance
+                    self.update_ui("guardrail", "Confirmation Required", "Say 'yes' to confirm or 'no' to cancel")
                     self.ui_log(f"[GUARDRAIL]: {warning}")
                     self.tts.speak(warning)
                     return
