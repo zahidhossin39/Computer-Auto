@@ -46,18 +46,13 @@ class FloatingHUD:
         self.root.overrideredirect(True)
         self.root.wm_attributes("-topmost", True)
 
-        # Set a non-black background as the transparent key color
+        # Set transparent key color on root (distinct from pill frame #181825)
         self.root.configure(bg=self._TRANSPARENT_KEY)
 
-        # Make the key color transparent on Windows
+        # Make the key color transparent on Windows without setting -alpha
+        # (Combining -transparentcolor and -alpha breaks DWM compositing on Windows 11)
         try:
             self.root.wm_attributes("-transparentcolor", self._TRANSPARENT_KEY)
-        except Exception:
-            pass
-
-        # Set alpha for Windows 11 compositing
-        try:
-            self.root.wm_attributes("-alpha", 0.97)
         except Exception:
             pass
 

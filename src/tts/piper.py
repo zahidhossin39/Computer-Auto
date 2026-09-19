@@ -8,16 +8,7 @@ class VoiceFeedback:
     """Provides low-latency spoken responses using local engines."""
 
     def __init__(self):
-        self._sapi = None
-        self._init_sapi()
-
-    def _init_sapi(self) -> None:
-        """Initialize Windows SAPI5 voice engine."""
-        try:
-            import win32com.client
-            self._sapi = win32com.client.Dispatch("SAPI.SpVoice")
-        except Exception:
-            self._sapi = None
+        pass
 
     def speak(self, text: str, asynchronous: bool = True) -> None:
         """Speak given text string aloud."""
@@ -31,11 +22,28 @@ class VoiceFeedback:
             self._speak_sync(text)
 
     def _speak_sync(self, text: str) -> None:
-        if self._sapi is not None:
-            try:
-                self._sapi.Speak(text)
-            except Exception:
-                pass
-        else:
+        """Synchronously speak using Windows SAPI5 with per-thread COM initialization."""
+        co_initialized = False
+        spoken = False
+        try:
+            import pythoncom
+            import win32com.client
+
+            pythoncom.CoInitialize()
+            co_initialized = True
+            sapi = win32com.client.Dispatch("SAPI.SpVoice")
+            sapi.Speak(text)
+            spoken = True
+        except Exception:
+            spoken = False
+        finally:
+            if co_initialized:
+                try:
+                    import pythoncom
+                    pythoncom.CoUninitialize()
+                except Exception:
+                    pass
+
+        if not spoken:
             # Fallback console feedback
             print(f"[Assistant Voice]: {text}")

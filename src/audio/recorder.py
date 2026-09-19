@@ -13,18 +13,19 @@ except ImportError:
 class AudioRecorder:
     """Captures 16kHz mono audio streams and accumulates samples in memory."""
 
-    def __init__(self, sample_rate: int = 16000):
+    def __init__(self, sample_rate: int = 16000, device_index: Optional[int] = None):
         self.sample_rate = sample_rate
+        self.device_index = device_index
         self.is_recording = False
         self._buffer: List[np.ndarray] = []
         self._stream: Optional[sd.InputStream] = None
         self._lock = threading.Lock()
+        self.last_error: Optional[str] = None
 
     def _audio_callback(self, indata, frames, time_info, status):
-        """Internal sounddevice stream callback."""
+        """sounddevice stream callback accumulating audio."""
         if self.is_recording:
-            # Flatten mono input to 1D float32 array
-            chunk = indata.copy().flatten().astype(np.float32)
+            chunk = indata[:, 0].copy()
             with self._lock:
                 self._buffer.append(chunk)
 
@@ -36,22 +37,41 @@ class AudioRecorder:
 
     def start(self) -> None:
         """Start capturing audio."""
+        self.last_error = None
         with self._lock:
             self._buffer.clear()
             self.is_recording = True
 
-        if sd is not None and self._stream is None:
+        if sd is None:
+            self.last_error = "sounddevice library not available"
+            return
+
+        if self._stream is None:
             try:
                 self._stream = sd.InputStream(
                     samplerate=self.sample_rate,
+                    device=self.device_index,
                     channels=1,
                     dtype="float32",
                     callback=self._audio_callback,
                 )
                 self._stream.start()
             except Exception as e:
-                # Handle cases where audio device is unavailable
-                pass
+                self.last_error = f"Failed to start device {self.device_index}: {e}"
+                # If specified device fails, attempt with system default device
+                if self.device_index is not None:
+                    try:
+                        self._stream = sd.InputStream(
+                            samplerate=self.sample_rate,
+                            device=None,
+                            channels=1,
+                            dtype="float32",
+                            callback=self._audio_callback,
+                        )
+                        self._stream.start()
+                        self.last_error = None  # Fallback succeeded
+                    except Exception as e2:
+                        self.last_error = f"Device {self.device_index} and default fallback failed: {e2}"
 
     def stop(self) -> np.ndarray:
         """Stop capturing and return concatenated float32 audio samples."""

@@ -119,11 +119,13 @@ class SpeechRecognizer:
                 stream = self._recognizer.create_stream()
                 stream.accept_waveform(sample_rate, samples)
                 self._recognizer.decode_stream(stream)
-                text = stream.result.text.strip().lower()
-                if text:
-                    return text
+                return stream.result.text.strip().lower()
             except Exception:
                 pass
 
-        # 2. Seamless Fallback: Gemini Cloud STT
+        # 2. Seamless Fallback: Gemini Cloud STT (only if audio has energy)
+        max_amp = float(np.max(np.abs(samples))) if len(samples) > 0 else 0.0
+        if max_amp < 0.01:
+            return ""
+
         return self._transcribe_gemini(samples, sample_rate)

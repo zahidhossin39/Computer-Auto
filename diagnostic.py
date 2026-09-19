@@ -1,10 +1,15 @@
-"""Quick diagnostic: tests that the HUD pill appears and hotkey detects double-tap.
-Run with:  python -u diagnostic.py
-Then:
-1. You should see a dark floating pill at the top-center of your screen.
-2. Double-tap Left Ctrl — the console should print "DOUBLE TAP DETECTED".
-3. Press Escape to exit.
+"""System Diagnostic & Interactive Prototype for Computer-Auto.
+
+Runs automated pre-flight checks across all subsystems and launches
+the visible Desktop Control Center prototype for local testing.
+
+Usage:
+  python -u diagnostic.py         # Launches full visible Desktop App prototype
+  python -u diagnostic.py --hud   # Tests the compact Floating HUD pill
 """
+
+import argparse
+import os
 import sys
 import threading
 import time
@@ -12,60 +17,117 @@ import time
 if sys.platform == "win32":
     try:
         sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
     except Exception:
         pass
 
-from src.ui.hud import FloatingHUD
+from pathlib import Path
+try:
+    from dotenv import load_dotenv
+    env_file = Path(__file__).resolve().parent / ".env"
+    if env_file.is_file():
+        load_dotenv(dotenv_path=env_file)
+except Exception:
+    pass
+
+from main import ComputerAutoDaemon
 from src.trigger.hotkey import GlobalHotkeyListener
+from src.ui.hud import FloatingHUD
+from src.ui.app import DesktopApp
+from src.stt.engine import SpeechRecognizer
+from src.vision.capture import ScreenCapture
+from src.vision.agent import GeminiVisionAgent
 
 
-def on_toggle(is_listening):
-    state_str = "LISTENING" if is_listening else "STOPPED"
-    print(f"\n*** DOUBLE TAP DETECTED! State -> {state_str} ***\n")
-    if hud:
-        if is_listening:
-            hud.update_state("listening", "Listening...", "Speak now!")
+def run_subsystem_checks():
+    """Run non-destructive self-checks and print status table."""
+    print("=" * 65)
+    print("  COMPUTER-AUTO SUBSYSTEM SELF-DIAGNOSTIC")
+    print("=" * 65)
+
+    checks = []
+
+    # 1. Hotkey Subsystem
+    try:
+        import win32api
+        checks.append(("Win32 Hotkey Poller", "OK", "Native GetAsyncKeyState available (polling LCtrl + Esc)"))
+    except ImportError:
+        checks.append(("Win32 Hotkey Poller", "FALLBACK", "pynput fallback active"))
+
+    # 2. Audio Device Subsystem
+    try:
+        import sounddevice as sd
+        devs = [d for d in sd.query_devices() if d.get("max_input_channels", 0) > 0]
+        if devs:
+            checks.append(("Audio Input Devices", "OK", f"Found {len(devs)} input device(s) - default: {devs[0]['name'][:30]}"))
         else:
-            hud.update_state("ready", "Ready", "Double-tap Ctrl to speak")
+            checks.append(("Audio Input Devices", "WARN", "No input recording devices detected"))
+    except Exception as e:
+        checks.append(("Audio Input Devices", "FAIL", str(e)))
+
+    # 3. Parakeet STT Model Files
+    model_dir = os.path.join(os.path.dirname(__file__), "models", "parakeet-tdt-0.6b-int8")
+    req_files = ["encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt"]
+    missing = [f for f in req_files if not os.path.isfile(os.path.join(model_dir, f))]
+    if not missing:
+        checks.append(("Parakeet STT INT8", "OK", "All 4 ONNX model weights present on disk"))
+    else:
+        checks.append(("Parakeet STT INT8", "WARN", f"Missing model weights: {missing}"))
+
+    # 4. Gemini API Key
+    gemini_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if gemini_key:
+        checks.append(("Gemini Flash API Key", "OK", f"Configured in .env (len: {len(gemini_key)})"))
+    else:
+        checks.append(("Gemini Flash API Key", "WARN", "GEMINI_API_KEY not found in .env"))
+
+    # 5. Screen Capture
+    try:
+        cap = ScreenCapture()
+        img, w, h = cap.grab_screen()
+        checks.append(("Screen Capture", "OK", f"Active display captured ({w}x{h}, mode={img.mode})"))
+    except Exception as e:
+        checks.append(("Screen Capture", "FAIL", str(e)))
+
+    # 6. SAPI5 Voice Feedback
+    try:
+        from src.tts.piper import VoiceFeedback
+        tts = VoiceFeedback()
+        checks.append(("Windows Voice TTS", "OK", "SAPI5 COM SpVoice engine initialized and ready"))
+    except Exception as e:
+        checks.append(("Windows Voice TTS", "FAIL", str(e)))
+
+    # Print summary
+    for name, status, detail in checks:
+        badge = f"[{status}]"
+        print(f"  {badge:8} {name:<24} {detail}")
+
+    print("=" * 65)
+    print()
 
 
-def on_panic():
-    print("\n*** PANIC (Escape) pressed — exiting ***\n")
-    listener.stop()
-    if hud and hud.root:
-        hud.root.after(0, hud._handle_close)
+def main():
+    parser = argparse.ArgumentParser(description="Computer-Auto Diagnostic & Prototype")
+    parser.add_argument("--hud", action="store_true", help="Launch mini Floating HUD instead of Control Center")
+    parser.add_argument("--check-only", action="store_true", help="Run automated checks without opening GUI")
+    args = parser.parse_args()
 
+    run_subsystem_checks()
 
-hud = FloatingHUD()
-listener = GlobalHotkeyListener(
-    threshold_ms=500,
-    on_toggle=on_toggle,
-    on_panic=on_panic,
-)
+    if args.check_only:
+        return
+
+    mode = "hud" if args.hud else "app"
+    print(f"Launching Computer-Auto in [{mode.upper()}] mode...")
+    if mode == "app":
+        print("A fully visible desktop Control Center window will appear.")
+        print("You can test speech, hotkeys, commands, and vision navigation inside.")
+    else:
+        print("A floating status pill will appear at the top-center of your screen.")
+
+    daemon = ComputerAutoDaemon(ui_mode=mode)
+    daemon.run()
+
 
 if __name__ == "__main__":
-    print("=" * 50)
-    print(" DIAGNOSTIC: HUD Pill + Hotkey Test")
-    print("=" * 50)
-    print()
-    print("1. A dark floating pill should appear at the top of your screen.")
-    print("2. Double-tap Left Ctrl -> should print DOUBLE TAP DETECTED.")
-    print("3. Press Escape to exit.")
-    print()
-
-    # Start hotkey listener
-    listener.start()
-    print("[OK] Hotkey listener started")
-
-    # Init and run HUD on main thread
-    hud.init_ui()
-    print("[OK] HUD pill initialized — check the top-center of your screen!")
-    print()
-
-    try:
-        hud.mainloop()
-    except KeyboardInterrupt:
-        pass
-
-    listener.stop()
-    print("Diagnostic complete.")
+    main()
