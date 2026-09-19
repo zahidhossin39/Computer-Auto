@@ -2,10 +2,28 @@
 
 import ctypes
 import os
+import shutil
 import subprocess
+import sys
 from typing import Optional
 import pyautogui
 from src.config import IntentAction
+
+
+def ensure_default_desktop() -> None:
+    """Ensure current thread is attached to the user's interactive 'Default' desktop.
+    Fixes spawned GUI processes rendering into isolated virtual desktops (e.g. exebox-*)
+    when executed from integrated IDE terminals.
+    """
+    if sys.platform == "win32":
+        try:
+            user32 = ctypes.windll.user32
+            hDesk = user32.OpenDesktopW("Default", 0, False, 0x01FF)
+            if hDesk:
+                user32.SetThreadDesktop(hDesk)
+        except Exception:
+            pass
+
 
 try:
     import win32con
@@ -140,15 +158,52 @@ class WindowsExecutor:
         if not action.target:
             return False
 
+        ensure_default_desktop()
+
         targets = [action.target]
         if action.fallback_target:
             targets.append(action.fallback_target)
 
         for target in targets:
+            # Resolve executable to an absolute path via PATH if available.
+            # CRITICAL: On Windows 10/11, relative 'notepad.exe' invokes the UWP/MSIX App Execution Alias
+            # (%LOCALAPPDATA%\Microsoft\WindowsApps\notepad.exe) which creates a suspended/invisible
+            # background process when launched from an IDE/terminal. Resolving via shutil.which yields
+            # 'C:\Windows\System32\notepad.exe' which reliably opens an interactive visible GUI window.
+            resolved_target = shutil.which(target) or target
+
+            # 1. On Windows, use os.startfile to ensure the process launches
+            # onto the user's interactive 'Default' desktop station (WinSta0\Default),
+            # preventing invisible windows when launched from sandboxed/IDE terminals.
+            if hasattr(os, "startfile"):
+                try:
+                    args_str = " ".join(action.args) if action.args else ""
+                    if args_str:
+                        os.startfile(resolved_target, "open", arguments=args_str)
+                    else:
+                        os.startfile(resolved_target)
+                    return True
+                except Exception:
+                    pass
+
+            # 2. Fallback to subprocess.Popen with WinSta0\Default desktop
             try:
-                subprocess.Popen([target] + action.args, shell=True)
+                startupinfo = None
+                if sys.platform == "win32":
+                    try:
+                        startupinfo = subprocess.STARTUPINFO()
+                        startupinfo.lpDesktop = r"WinSta0\Default"
+                    except Exception:
+                        startupinfo = None
+
+                # Avoid shell=True because cmd.exe drops lpDesktop inheritance for child processes
+                if startupinfo:
+                    subprocess.Popen([resolved_target] + action.args, startupinfo=startupinfo)
+                else:
+                    subprocess.Popen([resolved_target] + action.args)
                 return True
             except Exception:
                 continue
 
         return False
+

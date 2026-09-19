@@ -101,7 +101,8 @@ class SpeechRecognizer:
                     "Transcribe the spoken command in this audio exactly. Return ONLY the transcribed text in lowercase, without quotes, timestamps, or commentary. If silence or unintelligible, return nothing.",
                 ],
             )
-            return resp.text.strip().lower()
+            text = resp.text.strip().rstrip(".?!,:;\"'").strip().lower()
+            return text
         except Exception:
             return ""
 
@@ -113,19 +114,26 @@ class SpeechRecognizer:
         if self.mock_mode:
             return "mock transcription"
 
+        # Normalize soft audio to nominal acoustic range (0.5 peak) to aid Sherpa recognition
+        max_amp = float(np.max(np.abs(samples))) if len(samples) > 0 else 0.0
+        if 0.002 < max_amp < 0.25:
+            samples = (samples / max_amp * 0.5).astype(np.float32)
+
         # 1. Primary: On-device Sherpa-ONNX
         if self._recognizer is not None:
             try:
                 stream = self._recognizer.create_stream()
                 stream.accept_waveform(sample_rate, samples)
                 self._recognizer.decode_stream(stream)
-                return stream.result.text.strip().lower()
+                text = stream.result.text.strip().rstrip(".?!,:;\"'").strip().lower()
+                if text:
+                    return text
             except Exception:
                 pass
 
         # 2. Seamless Fallback: Gemini Cloud STT (only if audio has energy)
-        max_amp = float(np.max(np.abs(samples))) if len(samples) > 0 else 0.0
-        if max_amp < 0.01:
+        if max_amp < 0.002:
             return ""
 
         return self._transcribe_gemini(samples, sample_rate)
+

@@ -31,3 +31,95 @@ def test_empty_audio_recording():
     recorder.start()
     samples = recorder.stop()
     assert len(samples) == 0
+
+
+def test_audio_resampling_from_48k_to_16k():
+    """Verify that audio recorded at 48000Hz is accurately resampled to 16000Hz on stop."""
+    recorder = AudioRecorder(sample_rate=16000)
+    recorder.is_recording = True
+    recorder.actual_sample_rate = 48000
+
+    # 1 second of 48000Hz audio
+    raw_48k = np.sin(2 * np.pi * 440 * np.linspace(0, 1, 48000, endpoint=False)).astype(np.float32)
+    recorder.feed_audio_chunk(raw_48k)
+
+    resampled = recorder.stop()
+    assert len(resampled) == 16000
+    assert resampled.dtype == np.float32
+
+
+def test_multichannel_downmix():
+    """Verify stereo chunks are averaged to mono float32."""
+    recorder = AudioRecorder(sample_rate=16000)
+    recorder.is_recording = True
+
+    # Stereo chunk: Left channel 0.2, Right channel 0.8 -> mean 0.5
+    stereo_chunk = np.zeros((160, 2), dtype=np.float32)
+    stereo_chunk[:, 0] = 0.2
+    stereo_chunk[:, 1] = 0.8
+    recorder.feed_audio_chunk(stereo_chunk)
+
+    samples = recorder.stop()
+    assert len(samples) == 160
+    assert np.allclose(samples, 0.5, atol=1e-5)
+
+
+def test_silence_auto_stop_callback():
+    """Verify VAD silence callback triggers when speech is followed by silence."""
+    triggered = {"count": 0}
+
+    def on_silence():
+        triggered["count"] += 1
+
+    recorder = AudioRecorder(sample_rate=16000)
+    recorder.on_silence = on_silence
+    recorder.is_recording = True
+
+    # Simulate voice active chunk
+    active_chunk = np.ones((500, 1), dtype=np.float32) * 0.1
+    recorder._audio_callback(active_chunk, 500, None, 0)
+    assert recorder._speech_detected is True
+
+    # Trigger auto-stop directly
+    recorder._trigger_auto_stop()
+    import time
+    time.sleep(0.05)
+    assert triggered["count"] == 1
+    recorder.stop()
+
+
+def test_vad_soft_speech_detection():
+    """Verify soft speech triggers speech detection via RMS and peak energy."""
+    recorder = AudioRecorder(sample_rate=16000)
+    recorder.is_recording = True
+
+    # Soft speech chunk: peak 0.012, rms ~0.005
+    soft_chunk = np.ones((1600, 1), dtype=np.float32) * 0.012
+    recorder.feed_audio_chunk(soft_chunk)
+    assert recorder._speech_detected is True
+
+
+def test_vad_hard_timeout_prevents_infinite_hang():
+    """Verify that continuous ambient noise cannot hang the recorder indefinitely."""
+    triggered = {"count": 0}
+
+    def on_silence():
+        triggered["count"] += 1
+
+    recorder = AudioRecorder(sample_rate=16000)
+    recorder.on_silence = on_silence
+    recorder.is_recording = True
+    # Simulate recording started 8 seconds ago
+    import time
+    recorder._recording_start_time = time.time() - 8.0
+
+    # Feed ambient noise chunk
+    noise_chunk = np.ones((500, 1), dtype=np.float32) * 0.018
+    recorder.feed_audio_chunk(noise_chunk)
+
+    time.sleep(0.05)
+    assert triggered["count"] == 1
+    recorder.stop()
+
+
+

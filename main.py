@@ -78,6 +78,7 @@ class ComputerAutoDaemon:
             dev_idx = int(dev_env.strip())
 
         self.recorder = AudioRecorder(sample_rate=self.config.sample_rate, device_index=dev_idx)
+        self.recorder.on_silence = self._on_audio_silence_detected
         self.recognizer = SpeechRecognizer(
             model_dir=self.config.stt_model_dir, mock_mode=mock_stt
         )
@@ -103,7 +104,7 @@ class ComputerAutoDaemon:
                 daemon=self,
                 on_toggle_listening=self.on_ui_toggle_click,
                 on_panic=self.on_panic_key,
-                on_run_command=self.handle_command,
+                on_run_command=self.on_manual_command,
             )
             self.ui.init_ui()
         elif self.ui_mode == "hud":
@@ -115,6 +116,17 @@ class ComputerAutoDaemon:
 
         # Backward compatibility alias
         self.hud = self.ui
+
+    def on_manual_command(self, cmd: str) -> None:
+        """Handle manual command execution on a background thread so UI stays responsive."""
+        threading.Thread(target=self.handle_command, args=(cmd,), daemon=True).start()
+
+    def _on_audio_silence_detected(self) -> None:
+        """Invoked when voice activity ended and silence is detected."""
+        if self.recorder.is_recording or self.hotkey_listener.detector.is_listening:
+            print("[VAD]: Speech finished — auto-stopping recording...")
+            self.hotkey_listener.detector.is_listening = False
+            self.on_listening_toggle(False)
 
     def update_ui(self, state: str, message: str, detail: str = "") -> None:
         """Thread-safe UI status update dispatching to active UI."""
@@ -134,12 +146,13 @@ class ComputerAutoDaemon:
             pass
 
     def on_ui_toggle_click(self) -> None:
-        """Invoked when user clicks the microphone button on the floating HUD pill."""
-        new_state = not self.hotkey_listener.detector.is_listening
+        """Invoked when user clicks the microphone button on the floating HUD pill or DesktopApp."""
+        new_state = not (self.recorder.is_recording or self.hotkey_listener.detector.is_listening)
         self.hotkey_listener.detector.is_listening = new_state
         self.on_listening_toggle(new_state)
 
     def on_listening_toggle(self, is_listening: bool) -> None:
+
         """Invoked when listening state changes (via hotkey or UI click)."""
         if is_listening:
             self.play_sound(880, 100)
@@ -150,7 +163,11 @@ class ComputerAutoDaemon:
                 "Double-tap Ctrl or click Stop when done",
             )
             self.ui_log("[LISTENING]: Audio recording started...")
+            self.recorder.on_silence = self._on_audio_silence_detected
             self.recorder.start()
+            if self.recorder.last_error:
+                print(f"[AUDIO WARNING]: {self.recorder.last_error}")
+                self.ui_log(f"[AUDIO WARNING]: {self.recorder.last_error}")
         else:
             self.play_sound(550, 100)
             print("[PROCESSING] Transcribing speech utterance...")
@@ -173,7 +190,7 @@ class ComputerAutoDaemon:
             self.ui_log(f"[AUDIO WARNING]: No audio captured -> {err_msg}")
             return
 
-        text = self.recognizer.transcribe(samples)
+        text = self.recognizer.transcribe(samples, sample_rate=self.recorder.sample_rate)
         if not text:
             print("[WARNING] Could not recognize speech.")
             self.update_ui("ready", "Ready — Could not recognize audio", "Speak clearly into mic")
@@ -196,89 +213,99 @@ class ComputerAutoDaemon:
 
     def handle_command(self, utterance: str) -> None:
         """Process transcribed speech or typed command."""
-        print(f"[UTTERANCE]: \"{utterance}\"")
-        self.update_ui("processing", f"Routing: \"{utterance}\"", "Classifying intent...")
-        self.ui_log(f"[COMMAND]: Processing \"{utterance}\"")
+        if self._is_executing:
+            print(f"[BUSY]: Action in progress, skipping \"{utterance}\"")
+            self.ui_log(f"[BUSY]: Action in progress, please wait...")
+            return
 
-        route = self.router.route(utterance)
+        self._is_executing = True
+        try:
+            print(f"[UTTERANCE]: \"{utterance}\"")
+            self.update_ui("processing", f"Routing: \"{utterance}\"", "Classifying intent...")
+            self.ui_log(f"[COMMAND]: Processing \"{utterance}\"")
 
-        # 1. Tier 1: Deterministic System Intent
-        if not route.is_vision and route.intent is not None:
-            intent = route.intent
-            print(f"[TIER 1 ROUTER]: Matched intent '{intent.name}' ({intent.category})")
-            self.ui_log(f"[TIER 1 ROUTER]: Matched intent '{intent.name}' ({intent.category})")
+            route = self.router.route(utterance)
 
-            # Check Guardrails
-            if self.guardrail.requires_confirmation(utterance, intent.is_destructive):
-                warning = self.guardrail.format_confirmation_prompt(utterance)
-                print(f"[GUARDRAIL]: {warning}")
-                self.update_ui("guardrail", "Confirmation Required", warning)
-                self.ui_log(f"[GUARDRAIL]: {warning}")
-                self.tts.speak(warning)
-                return
+            # 1. Tier 1: Deterministic System Intent
+            if not route.is_vision and route.intent is not None:
+                intent = route.intent
+                print(f"[TIER 1 ROUTER]: Matched intent '{intent.name}' ({intent.category})")
+                self.ui_log(f"[TIER 1 ROUTER]: Matched intent '{intent.name}' ({intent.category})")
 
-            # Execute action
-            self.update_ui(
-                "executing",
-                f"Executing: {intent.name}",
-                f"Command: {intent.action.command or intent.action.target}",
-            )
+                # Check Guardrails
+                if self.guardrail.requires_confirmation(utterance, intent.is_destructive):
+                    warning = self.guardrail.format_confirmation_prompt(utterance)
+                    print(f"[GUARDRAIL]: {warning}")
+                    self.update_ui("guardrail", "Confirmation Required", warning)
+                    self.ui_log(f"[GUARDRAIL]: {warning}")
+                    self.tts.speak(warning)
+                    return
 
-            if intent.action.type == "system_action" and intent.action.command:
-                self.executor.execute_system_action(intent.action.command)
-                print(f"[EXECUTED]: Action '{intent.action.command}' dispatched.")
-                self.ui_log(f"[EXECUTED]: Dispatched '{intent.action.command}'")
-            elif intent.action.type == "launch_app":
-                success = self.executor.launch_app(intent.action)
-                if success:
-                    print(f"[EXECUTED]: Launched '{intent.action.target}'.")
-                    self.ui_log(f"[EXECUTED]: Launched '{intent.action.target}'")
-                else:
-                    print(f"[ERROR]: Could not launch '{intent.action.target}'.")
-                    self.ui_log(f"[ERROR]: Failed to launch '{intent.action.target}'")
+                # Execute action
+                self.update_ui(
+                    "executing",
+                    f"Executing: {intent.name}",
+                    f"Command: {intent.action.command or intent.action.target}",
+                )
 
-            self.update_ui("ready", f"Executed: {intent.name}", f"\"{utterance}\"")
+                if intent.action.type == "system_action" and intent.action.command:
+                    self.executor.execute_system_action(intent.action.command)
+                    print(f"[EXECUTED]: Action '{intent.action.command}' dispatched.")
+                    self.ui_log(f"[EXECUTED]: Dispatched '{intent.action.command}'")
+                elif intent.action.type == "launch_app":
+                    success = self.executor.launch_app(intent.action)
+                    if success:
+                        print(f"[EXECUTED]: Launched '{intent.action.target}'.")
+                        self.ui_log(f"[EXECUTED]: Launched '{intent.action.target}'")
+                    else:
+                        print(f"[ERROR]: Could not launch '{intent.action.target}'.")
+                        self.ui_log(f"[ERROR]: Failed to launch '{intent.action.target}'")
 
-        # 2. Tier 2: Unscripted Visual Navigation via Gemini Flash
-        else:
-            print("[TIER 2 VISION]: Unscripted command -> routing to Gemini Flash...")
-            self.update_ui("executing", "Vision Agent Planning...", "Analyzing screen with Gemini Flash...")
-            self.ui_log("[TIER 2 VISION]: Routing to Gemini Flash...")
+                self.update_ui("ready", f"Executed: {intent.name}", f"\"{utterance}\"")
 
-            img, w, h = self.capture.grab_screen()
-            print(f"[SCREEN CAPTURE]: Screen dimensions {w}x{h}")
-            self.ui_log(f"[SCREEN CAPTURE]: Captured {w}x{h}")
-
-            action = self.vision.plan_action(utterance, img)
-            print(f"[AGENT PLAN]: Action='{action.action}', Target=({action.x}, {action.y}) | {action.explanation}")
-            self.ui_log(f"[AGENT PLAN]: {action.action} at ({action.x}, {action.y}) -> {action.explanation}")
-
-            # If Gemini was unable to plan an action or errored out
-            if action.action == "none":
-                print(f"[WARNING]: Visual navigation planning failed -> {action.explanation}")
-                self.update_ui("ready", "Vision Action Failed", action.explanation[:45])
-                self.ui_log(f"[TIER 2 VISION ERROR]: {action.explanation}")
-                return
-
-            if self.guardrail.requires_confirmation(action.explanation):
-                warning = self.guardrail.format_confirmation_prompt(action.explanation)
-                print(f"[GUARDRAIL]: {warning}")
-                self.update_ui("guardrail", "Confirmation Required", warning)
-                self.ui_log(f"[GUARDRAIL]: {warning}")
-                self.tts.speak(warning)
-                return
-
-            self.update_ui("executing", f"Vision: {action.action}", action.explanation[:45])
-
-            success = self.vision.execute_action(action)
-            if success:
-                print("[EXECUTED]: Visual action completed.")
-                self.update_ui("ready", "Visual Action Completed", action.explanation[:45])
-                self.ui_log(f"[EXECUTED]: Visual action completed -> {action.explanation}")
+            # 2. Tier 2: Unscripted Visual Navigation via Gemini Flash
             else:
-                print(f"[WARNING]: Visual action could not be executed: {action.explanation}")
-                self.update_ui("ready", "Action not executable", action.explanation[:45])
-                self.ui_log(f"[WARNING]: Visual action could not be executed: {action.explanation}")
+                print("[TIER 2 VISION]: Unscripted command -> routing to Gemini Flash...")
+                self.update_ui("executing", "Vision Agent Planning...", "Analyzing screen with Gemini Flash...")
+                self.ui_log("[TIER 2 VISION]: Routing to Gemini Flash...")
+
+                img, w, h = self.capture.grab_screen()
+                print(f"[SCREEN CAPTURE]: Screen dimensions {w}x{h}")
+                self.ui_log(f"[SCREEN CAPTURE]: Captured {w}x{h}")
+
+                action = self.vision.plan_action(utterance, img)
+                print(f"[AGENT PLAN]: Action='{action.action}', Target=({action.x}, {action.y}) | {action.explanation}")
+                self.ui_log(f"[AGENT PLAN]: {action.action} at ({action.x}, {action.y}) -> {action.explanation}")
+
+                # If Gemini was unable to plan an action or errored out
+                if action.action == "none":
+                    print(f"[WARNING]: Visual navigation planning failed -> {action.explanation}")
+                    self.update_ui("ready", "Vision Action Failed", action.explanation[:45])
+                    self.ui_log(f"[TIER 2 VISION ERROR]: {action.explanation}")
+                    return
+
+                if self.guardrail.requires_confirmation(action.explanation):
+                    warning = self.guardrail.format_confirmation_prompt(action.explanation)
+                    print(f"[GUARDRAIL]: {warning}")
+                    self.update_ui("guardrail", "Confirmation Required", warning)
+                    self.ui_log(f"[GUARDRAIL]: {warning}")
+                    self.tts.speak(warning)
+                    return
+
+                self.update_ui("executing", f"Vision: {action.action}", action.explanation[:45])
+
+                success = self.vision.execute_action(action)
+                if success:
+                    print("[EXECUTED]: Visual action completed.")
+                    self.update_ui("ready", "Visual Action Completed", action.explanation[:45])
+                    self.ui_log(f"[EXECUTED]: Visual action completed -> {action.explanation}")
+                else:
+                    print(f"[WARNING]: Visual action could not be executed: {action.explanation}")
+                    self.update_ui("ready", "Action not executable", action.explanation[:45])
+                    self.ui_log(f"[WARNING]: Visual action could not be executed: {action.explanation}")
+        finally:
+            self._is_executing = False
+
 
     def shutdown(self) -> None:
         """Clean shutdown."""

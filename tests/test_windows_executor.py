@@ -47,10 +47,30 @@ def test_window_snap_actions(mock_hotkey, executor):
     mock_hotkey.assert_called_with("win", "right")
 
 
+@patch("os.startfile", create=True)
+def test_launch_app_success(mock_startfile, executor):
+    """Verify application launching dispatches os.startfile on Windows with resolved path."""
+    action = IntentAction(type="launch_app", target="notepad.exe")
+    success = executor.launch_app(action)
+    assert success is True
+    mock_startfile.assert_called_once()
+    called_target = mock_startfile.call_args[0][0]
+    # Target should be resolved to absolute executable path if found on PATH
+    assert "notepad" in called_target.lower()
+
+
+@patch("os.startfile", side_effect=OSError("Startfile failed"), create=True)
 @patch("subprocess.Popen")
-def test_launch_app_success(mock_popen, executor):
-    """Verify application launching dispatches subprocess."""
+def test_launch_app_fallback(mock_popen, mock_startfile, executor):
+    """Verify application launching falls back to subprocess with lpDesktop and without shell=True."""
     action = IntentAction(type="launch_app", target="notepad.exe")
     success = executor.launch_app(action)
     assert success is True
     mock_popen.assert_called_once()
+    called_args, called_kwargs = mock_popen.call_args
+    # Verify shell=True is NOT passed (avoids cmd.exe dropping lpDesktop)
+    assert called_kwargs.get("shell") is not True
+    if "startupinfo" in called_kwargs and called_kwargs["startupinfo"]:
+        assert called_kwargs["startupinfo"].lpDesktop == r"WinSta0\Default"
+
+

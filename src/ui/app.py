@@ -780,7 +780,7 @@ class DesktopApp:
                 self._status_badge.config(text="● RECORDING AUDIO", fg="#f38ba8")
                 self._detail_label.config(text=message, fg="#f38ba8")
                 self._mic_btn.config(
-                    text="⏹  Stop Listening (Processing...)",
+                    text="⏹  Stop Listening (Click when done)",
                     bg="#f38ba8",
                     activebackground="#eba0ac",
                 )
@@ -806,7 +806,13 @@ class DesktopApp:
             elif state == "error":
                 self._status_badge.config(text="❌ ERROR", fg="#f38ba8")
                 self._detail_label.config(text=message, fg="#f38ba8")
+                self._mic_btn.config(
+                    text="🎙️  Start Listening (Talk)",
+                    bg="#89b4fa",
+                    activebackground="#b4befe",
+                )
             else:  # ready
+
                 self._status_badge.config(text="● READY", fg="#a6e3a1")
                 self._detail_label.config(text=message, fg="#cdd6f4")
                 self._mic_btn.config(
