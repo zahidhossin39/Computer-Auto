@@ -72,3 +72,15 @@ def test_type_into_field_clicks_then_types_then_submits(mock_click, mock_write, 
     mock_click.assert_called_once_with(50, 60)
     mock_write.assert_called_once_with("linkedin", interval=0.01)
     mock_press.assert_called_once_with("enter")
+
+
+def test_type_without_a_target_lands_in_the_text_area():
+    """A 'type' action with no element must still land somewhere real, not wherever focus is."""
+    from src.vision.uia import Element
+    agent = VisionAgent(api_key="k")
+    elements = [Element("Close", "Button", (0, 0, 10, 10)), Element("Text editor", "Document", (0, 100, 500, 400))]
+    with patch("src.vision.uia.list_elements", return_value=elements), \
+         patch("src.jev.choose", return_value=("none", 1.0)), \
+         patch.object(agent, "_ask", return_value={"action": "type", "text": "banana", "explanation": "type"}):
+        a = agent.plan_action("type banana", Image.new("RGB", (600, 500)))
+    assert (a.x, a.y) == (250, 250)

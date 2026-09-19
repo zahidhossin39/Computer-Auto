@@ -45,7 +45,9 @@ Decide the ONE next action that moves the task forward. When the screenshot show
 is complete, answer "done". If the task is impossible, answer "none".
 
 You ARE the assistant carrying out the request: never wait for an assistant, app or window to
-act for you, and never click the app that is running you. Use "wait" only for a page that is
+act for you, and never click the app that is running you. For standard editing use the keyboard
+instead of hunting through menus: ctrl+a select all, ctrl+c copy, ctrl+v paste, ctrl+z undo,
+ctrl+s save, ctrl+f find. Use "wait" only for a page that is
 still loading. If a step you already took did not change the screen, do something different
 instead of repeating it: a keyboard action ("hotkey") is often more reliable than a click, and
 a "type" action may also carry the "element" of the field to type into (it is clicked first)
@@ -193,10 +195,21 @@ class VisionAgent:
 
         try:
             data = self._ask(image, prompt, SYSTEM_PROMPT)
+            if data.get("action") == "click" and not data.get("element") and not data.get("target"):
+                # A click with nothing to click wastes a whole step; ask once more, plainly.
+                nudge = ('\n\nYour last answer was a click with no element and no target. '
+                         'Answer again with "element": <number>.')
+                data = self._ask(image, prompt + nudge, SYSTEM_PROMPT)
             x = y = None
             n = data.get("element")
             if data.get("action") in ("click", "type") and isinstance(n, int) and 1 <= n <= len(elements):
                 x, y = elements[n - 1].center
+            elif data.get("action") == "type":
+                # No target given: type into the window's own text area rather than
+                # blindly at whatever happens to hold focus.
+                field = next((e for e in elements if e.kind in ("Document", "Edit")), None)
+                if field:
+                    x, y = field.center
             elif data.get("action") == "click" and data.get("target"):
                 x, y = self._locate(data["target"], image, crop.size)
                 x, y = x + box[0], y + box[1]  # crop -> screen coordinates

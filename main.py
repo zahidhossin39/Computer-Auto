@@ -136,6 +136,20 @@ class ComputerAutoDaemon:
             self.hotkey_listener.detector.is_listening = False
             self.on_listening_toggle(False)
 
+    def _restore_if_minimised(self, hwnd: int) -> int:
+        """A minimised window shows no elements and is not on screen, so the agent would
+        act blind. Restore it and let it paint before we look."""
+        try:
+            import win32con
+            import win32gui
+            if hwnd and win32gui.IsIconic(hwnd):
+                print("[VISION]: target window was minimised, restoring it")
+                win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                time.sleep(0.6)
+        except Exception:
+            pass
+        return hwnd
+
     def _set_ui_visible(self, visible: bool) -> None:
         """Ghost our own window during a vision run: shrunk, half-faded, click-through.
 
@@ -372,9 +386,11 @@ class ComputerAutoDaemon:
                 for step in range(1, self.MAX_VISION_STEPS + 1):
                     if not self._is_executing:
                         return
-                    img, w, h = self.capture.grab_screen()
                     # Re-read the target window every step: a click may open or focus a new one
-                    action = self.vision.plan_action(utterance, img, history, hwnd=self.executor._get_active_window() or 0)
+                    hwnd = self.executor._get_active_window() or 0
+                    hwnd = self._restore_if_minimised(hwnd)
+                    img, w, h = self.capture.grab_screen()
+                    action = self.vision.plan_action(utterance, img, history, hwnd=hwnd)
                     print(f"[AGENT STEP {step}]: {action.action} at ({action.x}, {action.y}) | {action.explanation}")
                     self.ui_log(f"[AGENT STEP {step}]: {action.action} at ({action.x}, {action.y}) -> {action.explanation}")
 
@@ -399,7 +415,7 @@ class ComputerAutoDaemon:
                     sig = (action.action, action.text) if action.action == "type" else (action.action, action.x, action.y)
                     repeats = repeats + 1 if sig == last_sig else 0
                     last_sig = sig
-                    if repeats >= 2:  # same action 3x: the screen is not responding to it
+                    if repeats >= 1:  # proposed twice in a row: it already happened or does nothing
                         print("[TIER 2 VISION]: same action had no effect, stopping.")
                         self.update_ui("ready", "Stopped: action had no effect", action.explanation[:45])
                         self.ui_log("[TIER 2 VISION]: Same action repeated with no effect -> stopped.")

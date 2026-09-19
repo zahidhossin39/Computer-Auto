@@ -17,6 +17,7 @@ CLICKABLE = {
     "ButtonControl", "HyperlinkControl", "ListItemControl", "MenuItemControl", "TabItemControl",
     "EditControl", "CheckBoxControl", "RadioButtonControl", "ComboBoxControl", "TreeItemControl",
     "SplitButtonControl",
+    "DocumentControl",  # the editable body of Notepad, Word, a browser page
 }
 MAX_ELEMENTS = 200  # Jev choices cap at 255; also keeps the planner prompt small
 
