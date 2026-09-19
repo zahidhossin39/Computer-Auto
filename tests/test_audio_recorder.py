@@ -123,3 +123,18 @@ def test_vad_hard_timeout_prevents_infinite_hang():
 
 
 
+
+
+def test_silence_before_speech_keeps_waiting():
+    """No speech yet: the recorder keeps listening and drops old silence instead of auto-stopping."""
+    import time
+    from unittest.mock import MagicMock
+    recorder = AudioRecorder(sample_rate=16000)
+    recorder.is_recording = True
+    recorder.on_silence = MagicMock()
+    recorder._recording_start_time = time.time() - 60  # long idle wait
+    for _ in range(20):
+        recorder.feed_audio_chunk(np.zeros(1600, dtype=np.float32))
+    time.sleep(0.1)
+    recorder.on_silence.assert_not_called()
+    assert sum(len(c) for c in recorder._buffer) <= 16000 * 2  # old silence was trimmed

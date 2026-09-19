@@ -105,11 +105,11 @@ class ComputerAutoDaemon:
         self._listening_lock = threading.Lock()
         self._listening_active = False
         self._pending_confirmation: Optional[str] = None
-        self.continuous = False  # re-arm the mic after every command (UI toggle)
+        self.continuous = False  # a listening session is active: re-arm the mic after every command
 
         self.hotkey_listener = GlobalHotkeyListener(
             threshold_ms=self.config.double_tap_threshold_ms,
-            on_toggle=self.on_listening_toggle,
+            on_toggle=lambda _state: self.toggle_session(),
             on_panic=self.on_panic_key,
         )
 
@@ -160,19 +160,21 @@ class ComputerAutoDaemon:
         except Exception:
             pass
 
-    def set_continuous(self, enabled: bool) -> None:
-        """Toggle continuous listening; turning it on starts listening right away."""
-        self.continuous = enabled
-        self.ui_log(f"[CONTINUOUS]: {'ON' if enabled else 'OFF'}")
-        if enabled and not self._listening_active:
-            self.hotkey_listener.detector.is_listening = True
-            self.on_listening_toggle(True)
+    def toggle_session(self) -> None:
+        """Double-tap / mic button: start a listening session, or end the running one.
 
-    def on_ui_toggle_click(self) -> None:
-        """Invoked when user clicks the microphone button on the floating HUD pill or DesktopApp."""
-        new_state = not (self.recorder.is_recording or self.hotkey_listener.detector.is_listening)
-        self.hotkey_listener.detector.is_listening = new_state
-        self.on_listening_toggle(new_state)
+        A session keeps listening and runs each command as it is spoken; the
+        detector's own flip-flop state is ignored so a tap during processing
+        ends the session instead of desyncing.
+        """
+        self.continuous = not self.continuous
+        self.hotkey_listener.detector.is_listening = self.continuous
+        self.ui_log(f"[SESSION]: {'started' if self.continuous else 'ended'}")
+        if self.continuous:
+            self.play_sound(880, 100)
+        self.on_listening_toggle(self.continuous)
+
+    on_ui_toggle_click = toggle_session
 
     def on_listening_toggle(self, is_listening: bool) -> None:
 
@@ -258,9 +260,7 @@ class ComputerAutoDaemon:
     def on_panic_key(self) -> None:
         """Invoked when user presses Escape."""
         print("\n[PANIC] Emergency stop triggered! Stopping all actions.")
-        self.continuous = False  # panic always ends the listening loop
-        if hasattr(self.ui, "continuous_var"):
-            self.ui.root.after(0, self.ui.continuous_var.set, False)
+        self.continuous = False  # panic always ends the session
         self.recorder.stop()
         self._is_executing = False
         self._pending_confirmation = None

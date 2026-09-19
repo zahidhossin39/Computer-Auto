@@ -224,21 +224,6 @@ class DesktopApp:
         )
         top_cb.pack(side="right")
 
-        # Continuous listening: keep re-arming the mic after each command
-        self.continuous_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(
-            title_row,
-            text="Continuous",
-            variable=self.continuous_var,
-            command=lambda: self.daemon and self.daemon.set_continuous(self.continuous_var.get()),
-            bg="#181825",
-            fg="#a6adc8",
-            selectcolor="#313244",
-            activebackground="#181825",
-            activeforeground="#cdd6f4",
-            font=("Segoe UI", 9),
-        ).pack(side="right", padx=(0, 8))
-
         # Status Banner Box
         banner_frame = tk.Frame(
             header_frame,

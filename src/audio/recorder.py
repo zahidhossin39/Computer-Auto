@@ -60,7 +60,14 @@ class AudioRecorder:
                 self._speech_start_time = now
                 self._silence_start_time = 0.0
             elif now - self._recording_start_time >= self.initial_silence_timeout:
-                self._trigger_auto_stop()
+                # Nobody spoke yet: keep waiting instead of processing silence. Keep only the
+                # last ~0.5s so the onset of speech isn't clipped, and restart the clock so
+                # max_duration measures the utterance, not the idle wait.
+                keep = int(self.actual_sample_rate * 0.5)
+                with self._lock:
+                    tail = np.concatenate(self._buffer)[-keep:] if self._buffer else None
+                    self._buffer = [tail] if tail is not None else []
+                self._recording_start_time = now
                 return
         else:
             is_active = (rms > self.silence_threshold_rms) or (peak > self.silence_threshold_peak)

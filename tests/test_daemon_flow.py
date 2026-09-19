@@ -134,7 +134,7 @@ def test_panic_resets_detector_and_pending():
 def test_continuous_mode_rearms_and_panic_ends_it():
     """Continuous mode re-arms the mic after each utterance; panic turns it off."""
     daemon = _make_daemon()
-    daemon.set_continuous(True)
+    daemon.toggle_session()
     assert daemon.recorder.is_recording
 
     daemon.on_listening_toggle(False)  # VAD stop -> worker runs -> should re-arm
@@ -144,6 +144,10 @@ def test_continuous_mode_rearms_and_panic_ends_it():
         time.sleep(0.02)
     assert daemon.recorder.is_recording and daemon._listening_active
 
+    daemon.toggle_session()  # second double-tap ends the session
+    assert daemon.continuous is False and not daemon._listening_active
+
+    daemon.toggle_session()
     daemon.on_panic_key()
     assert daemon.continuous is False and not daemon.recorder.is_recording
 
