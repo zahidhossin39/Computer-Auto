@@ -39,7 +39,7 @@ class AudioRecorder:
         self.silence_threshold_rms = 0.0025
         self.silence_threshold_peak = 0.008
         self.initial_silence_timeout = 4.5
-        self.post_speech_silence = 1.2
+        self.post_speech_silence = 0.8
         self.max_duration = 7.5
 
     def _process_vad(self, chunk: np.ndarray) -> None:

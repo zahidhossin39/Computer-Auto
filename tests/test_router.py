@@ -84,3 +84,15 @@ def test_articles_are_ignored(router):
     """'open the browser' matches the 'open browser' trigger."""
     res = router.route("open the browser")
     assert res.intent is not None and res.intent.name == "launch_browser"
+
+
+def test_jev_routes_paraphrase_and_low_confidence_goes_to_vision(router):
+    """Jev maps paraphrases to intents; unsure answers fall through to vision."""
+    from unittest.mock import patch
+    router.use_jev = True
+    with patch("src.jev.choose", return_value=("launch_notepad", 0.97)):
+        assert router.route("fire up the text editor").intent.name == "launch_notepad"
+    with patch("src.jev.choose", return_value=("launch_notepad", 0.5)):
+        assert router.route("fire up the text editor").is_vision is True
+    with patch("src.jev.choose", return_value=None):  # Jev down -> vision, never crash
+        assert router.route("fire up the text editor").is_vision is True

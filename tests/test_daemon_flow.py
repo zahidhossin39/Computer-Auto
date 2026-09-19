@@ -21,6 +21,7 @@ from main import ComputerAutoDaemon
 def _make_daemon() -> ComputerAutoDaemon:
     """Build a daemon with hardware-touching subsystems stubbed out."""
     daemon = ComputerAutoDaemon(mock_stt=True, mock_vision=True, ui_mode="none")
+    daemon.router.use_jev = False  # no network in tests
     daemon.recorder = MagicMock()
     daemon.recorder.is_recording = False
     daemon.recorder.last_error = None

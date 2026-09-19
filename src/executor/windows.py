@@ -43,9 +43,11 @@ def _shell_launch(target: str, args: str = "") -> bool:
 try:
     import win32con
     import win32gui
+    import win32process
 except ImportError:
     win32con = None
     win32gui = None
+    win32process = None
 
 # Windows Virtual Key Codes
 VK_VOLUME_MUTE = 0xAD
@@ -97,10 +99,30 @@ class WindowsExecutor:
             pass
 
     def _get_active_window(self) -> Optional[int]:
-        """Get HWND of foreground active window."""
+        """Get HWND of foreground active window.
+
+        When the foreground window belongs to this process (our always-on-top
+        Control Center), walk down the z-order and return the first visible,
+        titled, non-minimised window owned by another process instead.
+        """
         if win32gui is None:
             return None
-        return win32gui.GetForegroundWindow()
+        hwnd = win32gui.GetForegroundWindow()
+        if not hwnd or win32process is None:
+            return hwnd
+        if win32process.GetWindowThreadProcessId(hwnd)[1] != os.getpid():
+            return hwnd
+        hwnd = win32gui.GetWindow(hwnd, win32con.GW_HWNDNEXT)
+        while hwnd:
+            if (
+                win32gui.IsWindowVisible(hwnd)
+                and win32gui.GetWindowText(hwnd)
+                and not win32gui.IsIconic(hwnd)
+                and win32process.GetWindowThreadProcessId(hwnd)[1] != os.getpid()
+            ):
+                return hwnd
+            hwnd = win32gui.GetWindow(hwnd, win32con.GW_HWNDNEXT)
+        return None
 
     def execute_system_action(self, command: str) -> bool:
         """Execute system or window action by command identifier."""

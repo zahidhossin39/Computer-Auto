@@ -43,3 +43,21 @@ def test_execute_type_action(mock_write, agent):
 def test_destructive_vision_action_is_intercepted(agent):
     """Verify that dangerous vision commands trigger guardrail requirement."""
     assert agent.guardrail.requires_confirmation("delete my files") is True
+
+
+def test_marked_element_click_uses_exact_rect():
+    """Planner answers with a marked element number; the click lands on that element's rect center."""
+    from src.vision.uia import Element
+    agent = VisionAgent(api_key="k")
+    elements = [Element("A", "Button", (0, 0, 10, 10)), Element("B", "Button", (100, 100, 120, 140))]
+    img = Image.new("RGB", (400, 300))
+    with patch("src.vision.uia.list_elements", return_value=elements), \
+         patch("src.jev.choose", return_value=("none", 1.0)), \
+         patch.object(agent, "_ask", return_value={"action": "click", "element": 2, "explanation": "B"}):
+        a = agent.plan_action("click B", img)
+    assert (a.x, a.y) == (110, 120)
+
+    with patch("src.vision.uia.list_elements", return_value=elements), \
+         patch("src.jev.choose", return_value=("1", 0.95)):
+        a = agent.plan_action("click A", img)  # confident Jev pick: no vision call needed
+    assert (a.x, a.y) == (5, 5)

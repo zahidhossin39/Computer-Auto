@@ -1,5 +1,6 @@
 """Tests for Windows OS Executor."""
 
+import os
 from unittest.mock import Mock, patch
 import pytest
 from src.config import IntentAction
@@ -89,3 +90,32 @@ def test_launch_app_prefers_explorer_shell(mock_shell, mock_startfile, executor)
     executor.launch_app(IntentAction(type="launch_app", target="no_such_app_xyz.exe"))
     mock_shell.assert_not_called()
     mock_startfile.assert_called_once()
+
+
+def test_get_active_window_skips_own_control_center(executor):
+    """When foreground window is ours, the next foreign window in z-order is returned."""
+    own_hwnd, other_hwnd = 100, 200
+    pid = os.getpid()
+
+    mock_gui = Mock()
+    mock_gui.GetForegroundWindow.return_value = own_hwnd
+    mock_gui.GetWindow.return_value = other_hwnd
+    mock_gui.IsWindowVisible.return_value = True
+    mock_gui.GetWindowText.return_value = "Some Other App"
+    mock_gui.IsIconic.return_value = False
+
+    mock_process = Mock()
+    mock_process.GetWindowThreadProcessId.side_effect = (
+        lambda hwnd: (0, pid) if hwnd == own_hwnd else (0, pid + 1)
+    )
+
+    mock_con = Mock()
+    mock_con.GW_HWNDNEXT = 2
+
+    with (
+        patch("src.executor.windows.win32gui", mock_gui),
+        patch("src.executor.windows.win32process", mock_process),
+        patch("src.executor.windows.win32con", mock_con),
+    ):
+        assert executor._get_active_window() == other_hwnd
+    mock_gui.GetWindow.assert_called_with(own_hwnd, mock_con.GW_HWNDNEXT)

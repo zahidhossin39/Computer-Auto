@@ -93,7 +93,7 @@ class ComputerAutoDaemon:
         self.recognizer = SpeechRecognizer(
             model_dir=self.config.stt_model_dir, mock_mode=mock_stt
         )
-        self.router = CommandRouter(intents=self.config.intents)
+        self.router = CommandRouter(intents=self.config.intents, use_jev=True)
         self.executor = WindowsExecutor()
         self.guardrail = SafetyGuardrail()
         self.capture = ScreenCapture()
@@ -366,7 +366,8 @@ class ComputerAutoDaemon:
                     if not self._is_executing:
                         return
                     img, w, h = self.capture.grab_screen()
-                    action = self.vision.plan_action(utterance, img, history)
+                    # Re-read the target window every step: a click may open or focus a new one
+                    action = self.vision.plan_action(utterance, img, history, hwnd=self.executor._get_active_window() or 0)
                     print(f"[AGENT STEP {step}]: {action.action} at ({action.x}, {action.y}) | {action.explanation}")
                     self.ui_log(f"[AGENT STEP {step}]: {action.action} at ({action.x}, {action.y}) -> {action.explanation}")
 
@@ -390,7 +391,7 @@ class ComputerAutoDaemon:
                     self.update_ui("executing", f"Vision step {step}: {action.action}", action.explanation[:45])
                     ok = self.vision.execute_action(action)
                     history.append(f"{action.action}: {action.explanation}" + ("" if ok else " (FAILED)"))
-                    time.sleep(1.0)  # let the screen settle before the next look
+                    time.sleep(0.5)  # let the screen settle before the next look
 
                 self.update_ui("ready", "Vision stopped", f"Hit {self.MAX_VISION_STEPS}-step limit")
                 self.ui_log(f"[TIER 2 VISION]: Stopped after {self.MAX_VISION_STEPS} steps.")
@@ -442,6 +443,28 @@ class ComputerAutoDaemon:
 
 
 def main():
+    class _TeeStdout:
+        """Mirror every print to both the console and logs/app.log."""
+
+        def __init__(self, stream):
+            self._stream = stream
+            log_dir = Path(__file__).resolve().parent / "logs"
+            log_dir.mkdir(exist_ok=True)
+            self._log = open(log_dir / "app.log", "a", encoding="utf-8", buffering=1)
+
+        def write(self, message):
+            self._stream.write(message)
+            self._log.write(message)
+
+        def flush(self):
+            self._stream.flush()
+            self._log.flush()
+
+        def __getattr__(self, name):
+            return getattr(self._stream, name)
+
+    sys.stdout = _TeeStdout(sys.stdout)
+
     parser = argparse.ArgumentParser(description="Computer-Auto Voice Automation Engine")
     parser.add_argument(
         "--interactive", "-i", action="store_true", help="Run interactive terminal command loop without GUI"
