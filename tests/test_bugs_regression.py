@@ -1,4 +1,4 @@
-"""Automated feedback loop for Bug 1 (HUD invisible) and Bug 2 (Hotkey not firing).
+"""Automated feedback loop for Bug 1 (shell invisible) and Bug 2 (Hotkey not firing).
 
 This script tests both components in isolation without human interaction.
 Run with:  python -u tests/test_bugs_regression.py
@@ -18,65 +18,42 @@ if sys.platform == "win32":
         pass
 
 
-def test_bug1_hud_pill_renders_visible():
-    """Bug 1: HUD pill must create a visible Tk window that is NOT fully transparent.
-
-    The old code used #000000 as both the root bg AND the transparent key,
-    which could make the entire window invisible on Windows 11.
+def test_bug1_shell_pill_renders_visible():
+    """Bug 1: the pill must be a visible, on-screen window whose surface is not the
+    transparent key colour, which would make the whole window invisible on Windows 11.
     """
-    from src.ui.hud import FloatingHUD
+    from src.ui.shell import AppShell, CHROMA
 
-    results = {"window_exists": False, "geometry_ok": False, "transparent_key_safe": False, "error": None}
+    results = {"window_exists": False, "geometry_ok": False, "surface_visible": False, "error": None}
 
     def _run():
         try:
-            hud = FloatingHUD()
-            hud.init_ui()
+            shell = AppShell()
+            shell.init_ui()
+            results["window_exists"] = shell.root is not None and shell._is_running
 
-            # Check 1: root window was created
-            results["window_exists"] = hud.root is not None and hud._is_running
-
-            # Check 2: geometry is on-screen (not 0x0 or negative coords)
-            geom = hud.root.geometry()
-            # e.g. "480x58+400+20"
-            parts = geom.replace("+", "x").split("x")
-            w, h, x, y = int(parts[0]), int(parts[1]), int(parts[2]), int(parts[3])
+            shell.root.update_idletasks()
+            parts = shell.root.geometry().replace("+", "x").split("x")
+            w, h, x, y = (int(v) for v in parts[:4])
             results["geometry_ok"] = w > 0 and h > 0 and x >= 0 and y >= 0
 
-            # Check 3: the transparent key color is NOT the same as the pill frame bg
-            root_bg = hud.root.cget("bg")
-            pill_bg = hud._pill_frame.cget("bg")
-            # The transparent key should differ from the pill background
-            results["transparent_key_safe"] = root_bg != pill_bg
+            # The pill surface must never equal the colour Windows makes transparent
+            results["surface_visible"] = shell.pill.cget("bg") != CHROMA
 
-            # Print debug info
-            print(f"  root bg:        {root_bg}")
-            print(f"  pill frame bg:  {pill_bg}")
-            print(f"  transparent key: {hud._TRANSPARENT_KEY}")
-            print(f"  geometry:       {geom}")
-
-            hud.root.after(100, hud.root.quit)
-            hud.root.mainloop()
-            hud.root.destroy()
+            shell.root.after(100, shell.root.quit)
+            shell.root.mainloop()
+            shell.root.destroy()
         except Exception as e:
             results["error"] = str(e)
 
     t = threading.Thread(target=_run)
     t.start()
-    t.join(timeout=5)
+    t.join(timeout=8)
 
-    print(f"  [Bug 1] window_exists:       {results['window_exists']}")
-    print(f"  [Bug 1] geometry_ok:         {results['geometry_ok']}")
-    print(f"  [Bug 1] transparent_key_safe: {results['transparent_key_safe']}")
-    if results["error"]:
-        print(f"  [Bug 1] ERROR: {results['error']}")
-
-    assert results["window_exists"], "HUD root window was not created"
-    assert results["geometry_ok"], "HUD geometry is off-screen or zero-size"
-    assert results["transparent_key_safe"], "Root bg matches pill bg — window will be invisible!"
-    assert results["error"] is None, f"HUD init raised: {results['error']}"
-    print("  [Bug 1] PASS")
-
+    assert results["error"] is None, f"Shell init raised: {results['error']}"
+    assert results["window_exists"], "Shell root window was not created"
+    assert results["geometry_ok"], "Shell geometry is off-screen or zero-size"
+    assert results["surface_visible"], "Pill bg matches the transparent key -> window invisible!"
 
 def test_bug2_double_tap_fires_callback():
     """Bug 2: Simulated double-tap must fire the on_toggle callback.

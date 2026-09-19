@@ -47,8 +47,7 @@ from src.executor.guardrail import SafetyGuardrail
 from src.vision.capture import ScreenCapture
 from src.vision.agent import VisionAgent
 from src.tts.piper import VoiceFeedback
-from src.ui.hud import FloatingHUD
-from src.ui.app import DesktopApp
+from src.ui.shell import AppShell
 
 
 class ComputerAutoDaemon:
@@ -93,7 +92,7 @@ class ComputerAutoDaemon:
         self.recognizer = SpeechRecognizer(
             model_dir=self.config.stt_model_dir, mock_mode=mock_stt
         )
-        self.router = CommandRouter(intents=self.config.intents, use_jev=True)
+        self.router = CommandRouter(intents=self.config.intents, use_jev=self.config.use_jev)
         self.executor = WindowsExecutor()
         self.guardrail = SafetyGuardrail()
         self.capture = ScreenCapture()
@@ -114,18 +113,12 @@ class ComputerAutoDaemon:
         )
 
         self.ui = None
-        if self.ui_mode == "app":
-            self.ui = DesktopApp(
+        if self.ui_mode in ("app", "hud"):  # "hud" kept as an alias for the old flag
+            self.ui = AppShell(
                 daemon=self,
                 on_toggle_listening=self.on_ui_toggle_click,
                 on_panic=self.on_panic_key,
                 on_run_command=self.on_manual_command,
-            )
-            self.ui.init_ui()
-        elif self.ui_mode == "hud":
-            self.ui = FloatingHUD(
-                on_toggle_click=self.on_ui_toggle_click,
-                on_close=self.shutdown,
             )
             self.ui.init_ui()
 
@@ -144,12 +137,12 @@ class ComputerAutoDaemon:
             self.on_listening_toggle(False)
 
     def _set_ui_visible(self, visible: bool) -> None:
-        """Hide/show our own window so it never appears in the screenshot the agent plans from."""
-        root = getattr(self.ui, "root", None)
-        if root is None:
-            return
-        root.after(0, root.deiconify if visible else root.withdraw)
-        time.sleep(0.25)  # let the compositor actually remove/redraw the window
+        """Ghost our own window during a vision run: shrunk, half-faded, click-through.
+
+        It used to withdraw entirely, which could leave the app invisible with no way back.
+        """
+        if hasattr(self.ui, "set_ghost"):
+            self.ui.set_ghost(not visible)
 
     def update_ui(self, state: str, message: str, detail: str = "") -> None:
         """Thread-safe UI status update dispatching to active UI."""

@@ -1,5 +1,4 @@
-"""UI package for HUD overlay."""
-from .hud import FloatingHUD
-from .app import DesktopApp
+"""UI package."""
+from .shell import AppShell
 
-__all__ = ["FloatingHUD", "DesktopApp"]
+__all__ = ["AppShell"]

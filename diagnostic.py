@@ -44,8 +44,7 @@ except Exception:
 
 from main import ComputerAutoDaemon
 from src.trigger.hotkey import GlobalHotkeyListener
-from src.ui.hud import FloatingHUD
-from src.ui.app import DesktopApp
+from src.ui.shell import AppShell
 from src.stt.engine import SpeechRecognizer
 from src.vision.capture import ScreenCapture
 from src.vision.agent import VisionAgent

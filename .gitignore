@@ -48,3 +48,6 @@ htmlcov/
 
 # Logs
 logs/
+
+# User settings (contains API key)
+settings.json

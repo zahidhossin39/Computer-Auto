@@ -1,9 +1,14 @@
 """Configuration and intent registry loader."""
 
 from dataclasses import dataclass, field
+import json
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import yaml
+
+# What the Settings tab writes. Holds the API key, so .gitignore covers it.
+SETTINGS_PATH = Path(__file__).resolve().parent.parent / "settings.json"
 
 
 @dataclass
@@ -32,6 +37,7 @@ class AppConfig:
     stt_provider: str = "sherpa-onnx"
     stt_model_dir: str = "models/parakeet-tdt-0.6b-int8"
     vision_model: str = "qwen/qwen3-vl-8b-instruct"  # OpenRouter vision model (tested: accurate, ~$0.0003/call)
+    use_jev: bool = True  # Jev understands commands the trigger list misses
 
 
 def load_intents(config_path: Optional[Path] = None) -> List[Intent]:
@@ -70,7 +76,28 @@ def load_intents(config_path: Optional[Path] = None) -> List[Intent]:
     return intents
 
 
+def load_settings() -> Dict[str, Any]:
+    """Read the settings the user saved in the Settings tab."""
+    try:
+        return json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def save_settings(values: Dict[str, Any]) -> None:
+    """Write settings and apply the API key right away, so no restart is needed."""
+    SETTINGS_PATH.write_text(json.dumps(values, indent=2), encoding="utf-8")
+    if values.get("openrouter_api_key"):
+        os.environ["OPENROUTER_API_KEY"] = values["openrouter_api_key"]
+
+
 def load_config() -> AppConfig:
-    """Load full application configuration."""
-    intents = load_intents()
-    return AppConfig(intents=intents)
+    """Load full application configuration; saved settings win over the defaults."""
+    config = AppConfig(intents=load_intents())
+    settings = load_settings()
+    if settings.get("openrouter_api_key"):
+        os.environ.setdefault("OPENROUTER_API_KEY", settings["openrouter_api_key"])
+    if settings.get("vision_model"):
+        config.vision_model = settings["vision_model"]
+    config.use_jev = settings.get("use_jev", True)
+    return config
