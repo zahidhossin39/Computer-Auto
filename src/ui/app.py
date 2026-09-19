@@ -99,6 +99,15 @@ class DesktopApp:
         # Update initial state
         self._apply_state(self.current_state, self.current_message, self.current_detail)
 
+        # Force window to pop up in front of IDE and other windows
+        try:
+            self.root.deiconify()
+            self.root.lift()
+            self.root.attributes("-topmost", True)
+            self.root.focus_force()
+        except Exception:
+            pass
+
     def _center_window(self, width: int, height: int) -> None:
         try:
             sw = self.root.winfo_screenwidth()
