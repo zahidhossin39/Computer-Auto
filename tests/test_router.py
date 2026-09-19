@@ -78,3 +78,9 @@ def test_short_command_with_extra_words_still_matches(router):
     assert res.is_vision is False
     assert res.intent is not None
     assert res.intent.name == "launch_notepad"
+
+
+def test_articles_are_ignored(router):
+    """'open the browser' matches the 'open browser' trigger."""
+    res = router.route("open the browser")
+    assert res.intent is not None and res.intent.name == "launch_browser"

@@ -77,7 +77,13 @@ class GeminiVisionAgent:
 
         if not self.mock_mode and self.api_key and genai is not None:
             try:
-                self._client = genai.Client(api_key=self.api_key)
+                # Free tier has a low requests-per-minute cap: on 429 wait and retry instead of failing
+                self._client = genai.Client(
+                    api_key=self.api_key,
+                    http_options=types.HttpOptions(retry_options=types.HttpRetryOptions(
+                        attempts=4, initial_delay=5, max_delay=30, http_status_codes=[429, 503],
+                    )),
+                )
             except Exception:
                 self._client = None
 

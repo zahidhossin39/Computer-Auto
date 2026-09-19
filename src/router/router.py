@@ -28,7 +28,8 @@ class CommandRouter:
         """Strip punctuation, collapse spaces, and convert to lower case."""
         # Replace non-alphanumeric (except single spaces) with empty string
         cleaned = re.sub(r"[^\w\s]", "", text)
-        return " ".join(cleaned.lower().split())
+        # Drop articles so "open the browser" matches the "open browser" trigger
+        return " ".join(w for w in cleaned.lower().split() if w not in ("the", "a", "an"))
 
     def _build_index(self) -> None:
         """Index triggers for sub-millisecond lookup."""
