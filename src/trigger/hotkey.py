@@ -5,16 +5,14 @@ import time
 from typing import Callable, Optional
 
 try:
-    from pynput import keyboard
-except ImportError:
-    keyboard = None
-
-try:
     import win32api
-    import win32con
 except ImportError:
     win32api = None
-    win32con = None
+
+# Virtual key codes
+VK_LCONTROL = 0xA2
+VK_CONTROL = 0x11
+VK_ESCAPE = 0x1B
 
 
 class DoubleTapDetector:
@@ -31,33 +29,48 @@ class DoubleTapDetector:
         self.on_panic = on_panic
         self.last_tap_time: float = 0.0
         self.is_listening: bool = False
+        self._lock = threading.Lock()
 
     def handle_tap(self, timestamp: Optional[float] = None) -> bool:
         """Handle a single keypress tap event. Returns True if state toggled."""
         now = timestamp if timestamp is not None else time.time()
-        elapsed = now - self.last_tap_time
 
-        if 0.05 < elapsed <= self.threshold_s:
-            # Double-tap detected!
-            self.is_listening = not self.is_listening
-            self.last_tap_time = 0.0
-            if self.on_toggle:
-                self.on_toggle(self.is_listening)
-            return True
+        with self._lock:
+            elapsed = now - self.last_tap_time
 
-        self.last_tap_time = now
-        return False
+            if 0.05 < elapsed <= self.threshold_s:
+                # Double-tap detected!
+                self.is_listening = not self.is_listening
+                self.last_tap_time = 0.0
+                toggled = True
+                new_state = self.is_listening
+            else:
+                self.last_tap_time = now
+                toggled = False
+                new_state = None
+
+        # Call callback outside lock to avoid deadlocks
+        if toggled and self.on_toggle:
+            print(f"[HOTKEY] Double-tap detected! Listening={new_state}")
+            self.on_toggle(new_state)
+
+        return toggled
 
     def handle_panic(self) -> None:
         """Handle emergency abort keypress."""
-        self.is_listening = False
-        self.last_tap_time = 0.0
+        with self._lock:
+            self.is_listening = False
+            self.last_tap_time = 0.0
         if self.on_panic:
             self.on_panic()
 
 
 class GlobalHotkeyListener:
-    """Hybrid global keyboard listener using native Windows API polling + pynput."""
+    """Global keyboard listener using native Windows GetAsyncKeyState polling.
+
+    Uses ONLY the Win32 API poller (not pynput) to avoid the duplicate-event
+    race condition where both listeners fire for the same physical keypress.
+    """
 
     def __init__(
         self,
@@ -70,83 +83,82 @@ class GlobalHotkeyListener:
         )
         self._running = False
         self._poll_thread: Optional[threading.Thread] = None
-        self._pynput_listener: Optional[keyboard.Listener] = None
-
-    def _is_ctrl_key(self, key) -> bool:
-        """Robustly detect Left Ctrl across Windows driver variations."""
-        if key in (keyboard.Key.ctrl_l, keyboard.Key.ctrl):
-            return True
-        if hasattr(key, "name") and key.name in ("ctrl_l", "ctrl"):
-            return True
-        if hasattr(key, "vk") and key.vk in (162, 17):  # VK_LCONTROL, VK_CONTROL
-            return True
-        return False
-
-    def _on_pynput_press(self, key) -> None:
-        try:
-            if self._is_ctrl_key(key):
-                self.detector.handle_tap()
-            elif key == keyboard.Key.esc:
-                self.detector.handle_panic()
-        except Exception:
-            pass
 
     def _windows_poller_loop(self) -> None:
         """Background thread polling Windows GetAsyncKeyState directly."""
         ctrl_was_pressed = False
         esc_was_pressed = False
+        print("[HOTKEY] Win32 poller thread started (polling LCtrl + Escape)")
 
         while self._running:
             try:
-                # 0xA2 is VK_LCONTROL, 0x11 is VK_CONTROL
-                ctrl_state = win32api.GetAsyncKeyState(0xA2) or win32api.GetAsyncKeyState(0x11)
-                ctrl_is_pressed = bool(ctrl_state & 0x8000)
+                # Check Left Ctrl (0xA2) — use bitwise check, not Python 'or'
+                lctrl_state = win32api.GetAsyncKeyState(VK_LCONTROL)
+                ctrl_is_pressed = bool(lctrl_state & 0x8000)
 
                 if ctrl_is_pressed and not ctrl_was_pressed:
+                    # Key just went down (edge trigger)
                     self.detector.handle_tap()
                 ctrl_was_pressed = ctrl_is_pressed
 
-                # 0x1B is VK_ESCAPE
-                esc_state = win32api.GetAsyncKeyState(0x1B)
+                # Check Escape (0x1B)
+                esc_state = win32api.GetAsyncKeyState(VK_ESCAPE)
                 esc_is_pressed = bool(esc_state & 0x8000)
 
                 if esc_is_pressed and not esc_was_pressed:
                     self.detector.handle_panic()
                 esc_was_pressed = esc_is_pressed
 
+            except Exception as e:
+                print(f"[HOTKEY] Poller error: {e}")
+
+            time.sleep(0.015)  # ~66 Hz polling
+
+        print("[HOTKEY] Win32 poller thread stopped")
+
+    def _pynput_fallback_loop(self) -> None:
+        """Fallback for non-Windows systems using pynput."""
+        try:
+            from pynput import keyboard
+        except ImportError:
+            print("[HOTKEY] pynput not available, no keyboard listener running")
+            return
+
+        def on_press(key):
+            try:
+                if key in (keyboard.Key.ctrl_l, keyboard.Key.ctrl):
+                    self.detector.handle_tap()
+                elif key == keyboard.Key.esc:
+                    self.detector.handle_panic()
             except Exception:
                 pass
 
-            time.sleep(0.015)  # 15ms poll interval = ~66Hz, zero CPU impact
+        print("[HOTKEY] Using pynput fallback listener")
+        with keyboard.Listener(on_press=on_press) as listener:
+            while self._running:
+                time.sleep(0.1)
+            listener.stop()
 
     def start(self) -> None:
-        """Start both pynput and Windows native polling listeners."""
+        """Start the keyboard listener."""
         self._running = True
 
-        # 1. Start Windows native GetAsyncKeyState poller (most reliable)
         if win32api is not None:
+            # Preferred: native Win32 polling (most reliable on Windows)
             self._poll_thread = threading.Thread(
                 target=self._windows_poller_loop, daemon=True
             )
             self._poll_thread.start()
-
-        # 2. Start pynput hook as well
-        if keyboard is not None:
-            try:
-                self._pynput_listener = keyboard.Listener(
-                    on_press=self._on_pynput_press
-                )
-                self._pynput_listener.daemon = True
-                self._pynput_listener.start()
-            except Exception:
-                pass
+        else:
+            # Fallback: pynput (for non-Windows or missing win32api)
+            self._poll_thread = threading.Thread(
+                target=self._pynput_fallback_loop, daemon=True
+            )
+            self._poll_thread.start()
 
     def stop(self) -> None:
         """Stop listening."""
         self._running = False
-        if self._pynput_listener:
-            try:
-                self._pynput_listener.stop()
-            except Exception:
-                pass
-            self._pynput_listener = None
+        if self._poll_thread and self._poll_thread.is_alive():
+            self._poll_thread.join(timeout=1.0)
+        self._poll_thread = None
