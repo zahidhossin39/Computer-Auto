@@ -127,3 +127,15 @@ def test_key_enter_action(mock_vk, executor):
     success = executor.execute_system_action("key_enter")
     mock_vk.assert_called_with(0x0D)
     assert success is True
+
+
+def test_close_targets_other_window_not_our_own(executor):
+    """window_close must never Alt+F4 our own Control Center: it closed the app once."""
+    mock_gui = Mock()
+    with patch("src.executor.windows.win32gui", mock_gui), \
+         patch("src.executor.windows.win32con", Mock(WM_CLOSE=16)), \
+         patch.object(executor, "_get_active_window", return_value=4242), \
+         patch.object(executor, "_hotkey") as mock_hotkey:
+        assert executor.execute_system_action("window_close_active") is True
+    mock_gui.PostMessage.assert_called_once_with(4242, 16, 0, 0)
+    mock_hotkey.assert_not_called()

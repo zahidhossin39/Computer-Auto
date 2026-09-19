@@ -187,8 +187,13 @@ class WindowsExecutor:
             return True
 
         elif command == "window_close_active":
-            self._hotkey("alt", "f4")
-            return True
+            # Alt+F4 hits whatever holds focus, which closed our own Control Center.
+            # _get_active_window() skips our windows, so close that one directly.
+            hwnd = self._get_active_window()
+            if hwnd and win32gui and win32con:
+                win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
+                return True
+            return False
 
         # System Lock
         elif command == "system_lock":
