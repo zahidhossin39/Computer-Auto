@@ -10,8 +10,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.ui.shell import AppShell, ACCENT, MIC, DONE
 
 
-@pytest.fixture
-def shell():
+@pytest.fixture(scope="module")
+def _shell():
+    # One Tk per process: creating a second root after one is destroyed breaks Tcl.
     s = AppShell()
     s.init_ui()
     yield s
@@ -19,6 +20,14 @@ def shell():
         s.root.destroy()
     except Exception:
         pass
+
+
+@pytest.fixture
+def shell(_shell):
+    _shell.set_ghost(False)
+    _shell._collapse()
+    _shell.root.update()
+    return _shell
 
 
 def test_pill_shows_state_and_expands_to_panel(shell):
