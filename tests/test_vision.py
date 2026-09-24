@@ -84,3 +84,20 @@ def test_type_without_a_target_lands_in_the_text_area():
          patch.object(agent, "_ask", return_value={"action": "type", "text": "banana", "explanation": "type"}):
         a = agent.plan_action("type banana", Image.new("RGB", (600, 500)))
     assert (a.x, a.y) == (250, 250)
+
+
+def test_mouse_actions_beyond_click(monkeypatch):
+    """Scroll, double-click and right-click reach pyautogui at the element's point."""
+    from unittest.mock import MagicMock
+    from src.vision import agent
+    from src.vision.agent import VisionAction, VisionAgent
+    fake = MagicMock()
+    monkeypatch.setattr(agent, "pyautogui", fake)
+    v = VisionAgent(api_key="x")
+    assert v.execute_action(VisionAction("scroll", 10, 20, direction="down"))
+    fake.moveTo.assert_called_with(10, 20)
+    fake.scroll.assert_called_with(-600)
+    assert v.execute_action(VisionAction("double_click", 1, 2))
+    fake.doubleClick.assert_called_with(1, 2)
+    assert v.execute_action(VisionAction("right_click", 3, 4))
+    fake.rightClick.assert_called_with(3, 4)

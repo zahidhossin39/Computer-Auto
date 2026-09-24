@@ -32,13 +32,14 @@ FALLBACK_MODELS = ["google/gemini-3.1-flash-lite", "qwen/qwen3-vl-30b-a3b-instru
 
 @dataclass
 class VisionAction:
-    action: str  # "click", "type", "hotkey", "wait", "done", "none"
+    action: str  # click, double_click, right_click, type, hotkey, scroll, wait, done, none
     x: Optional[int] = None
     y: Optional[int] = None
     text: Optional[str] = None
     keys: List[str] = field(default_factory=list)
     submit: bool = False  # press Enter after typing
     final: bool = False  # this action alone finishes the request: no look afterwards
+    direction: str = "down"  # for scroll
     explanation: str = ""
 
 
@@ -65,8 +66,9 @@ to click has no box, describe it in "target" precisely enough to find it visuall
 
 You MUST respond strictly with valid JSON conforming to this schema:
 {
-  "action": "click" | "type" | "hotkey" | "wait" | "done" | "none",
-  "element": integer (number of the marked element to click),
+  "action": "click" | "double_click" | "right_click" | "type" | "hotkey" | "scroll" | "wait" | "done" | "none",
+  "element": integer (number of the marked element to click, or to scroll over),
+  "direction": "up" | "down" (for scroll: moves about half a page),
   "target": string (visual description, only when no marked element fits),
   "text": string (text to type, if action is type),
   "submit": true/false (press Enter after typing, e.g. to run a search),
@@ -210,14 +212,16 @@ class VisionAgent:
     def _plan(self, image: str, prompt: str, elements, crop_size, box) -> VisionAction:
         try:
             data = self._ask(image, prompt, SYSTEM_PROMPT)
-            if data.get("action") == "click" and not data.get("element") and not data.get("target"):
+            if data.get("action") in ("click", "double_click", "right_click") and not (
+                    data.get("element") or data.get("target")):
                 # A click with nothing to click wastes a whole step; ask once more, plainly.
                 nudge = ('\n\nYour last answer was a click with no element and no target. '
                          'Answer again with "element": <number>.')
                 data = self._ask(image, prompt + nudge, SYSTEM_PROMPT)
             x = y = None
             n = data.get("element")
-            if data.get("action") in ("click", "type") and isinstance(n, int) and 1 <= n <= len(elements):
+            act = data.get("action")
+            if act in ("click", "double_click", "right_click", "type", "scroll") and isinstance(n, int) and 1 <= n <= len(elements):
                 x, y = elements[n - 1].center
             elif data.get("action") == "type":
                 # No target given: type into the window's own text area rather than
@@ -225,7 +229,7 @@ class VisionAgent:
                 field = next((e for e in elements if e.kind in ("Document", "Edit")), None)
                 if field:
                     x, y = field.center
-            elif data.get("action") == "click" and data.get("target"):
+            elif act in ("click", "double_click", "right_click") and data.get("target"):
                 x, y = self._locate(data["target"], image, crop_size)
                 x, y = x + box[0], y + box[1]  # crop -> screen coordinates
             return VisionAction(
@@ -235,6 +239,7 @@ class VisionAgent:
                 text=data.get("text"),
                 submit=bool(data.get("submit")),
                 final=bool(data.get("final")),
+                direction="up" if str(data.get("direction", "")).lower() == "up" else "down",
                 keys=data.get("keys") or [],
                 explanation=data.get("explanation", ""),
             )
@@ -251,8 +256,20 @@ class VisionAgent:
     def execute_action(self, action: VisionAction) -> bool:
         """Execute the planned visual action via PyAutoGUI."""
         try:
-            if action.action == "click" and action.x is not None and action.y is not None:
+            has_xy = action.x is not None and action.y is not None
+            if action.action == "click" and has_xy:
                 pyautogui.click(action.x, action.y)
+                return True
+            elif action.action == "double_click" and has_xy:
+                pyautogui.doubleClick(action.x, action.y)
+                return True
+            elif action.action == "right_click" and has_xy:
+                pyautogui.rightClick(action.x, action.y)
+                return True
+            elif action.action == "scroll":
+                if has_xy:
+                    pyautogui.moveTo(action.x, action.y)  # the wheel scrolls what is under the mouse
+                pyautogui.scroll(-600 if action.direction == "down" else 600)
                 return True
             elif action.action == "type" and action.text:
                 if action.x is not None and action.y is not None:
