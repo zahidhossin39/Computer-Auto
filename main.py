@@ -91,7 +91,8 @@ class ComputerAutoDaemon:
         self.recorder = AudioRecorder(sample_rate=self.config.sample_rate, device_index=dev_idx)
         self.recorder.on_silence = self._on_audio_silence_detected
         self.recognizer = SpeechRecognizer(
-            model_dir=self.config.stt_model_dir, mock_mode=mock_stt
+            model_dir=self.config.stt_model_dir, mock_mode=mock_stt,
+            cloud_model=self.config.stt_cloud_model,
         )
         self.router = CommandRouter(intents=self.config.intents, use_jev=self.config.use_jev)
         threading.Thread(target=apps.load, daemon=True).start()  # "open <app>" index, ~1s
@@ -99,7 +100,8 @@ class ComputerAutoDaemon:
         self.guardrail = SafetyGuardrail()
         self.capture = ScreenCapture()
         self.vision = VisionAgent(
-            model_name=self.config.vision_model, mock_mode=mock_vision
+            model_name=self.config.vision_model, mock_mode=mock_vision,
+            api_key=self.config.vision_api_key or None, api_base=self.config.vision_api_base,
         )
         self.tts = VoiceFeedback()
         self._is_executing = False

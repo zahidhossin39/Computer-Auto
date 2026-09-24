@@ -1,4 +1,4 @@
-"""Sherpa-ONNX offline speech recognizer with Gemini Flash fallback."""
+"""Speech recognizer: Parakeet on-device, or a cloud transcription model via OpenRouter."""
 
 import io
 import os
@@ -18,30 +18,28 @@ try:
 except ImportError:
     sherpa_onnx = None
 
-try:
-    from google import genai
-    from google.genai import types
-except ImportError:
-    genai = None
-    types = None
+TRANSCRIBE_URL = "https://openrouter.ai/api/v1/audio/transcriptions"
+# Names the local model mishears; the cloud model takes them as a spelling hint
+VOCAB_HINT = "Claude, Claude Code, Chrome, Discord, VS Code, Notepad, new tab, YouTube, Gmail"
 
 
 class SpeechRecognizer:
-    """Speech-to-Text engine: Parakeet TDT on CPU (primary) with Gemini Flash fallback."""
+    """Parakeet TDT on CPU by default; `cloud_model` (e.g. openai/gpt-4o-transcribe) sends
+    audio to OpenRouter instead: ~1.3s, ~$0.0002 a command, better with names."""
 
     def __init__(
         self,
         model_dir: Optional[str] = "models/parakeet-tdt-0.6b-int8",
         mock_mode: bool = False,
+        cloud_model: str = "",
     ):
         self.model_dir = Path(model_dir) if model_dir else None
         self.mock_mode = mock_mode
         self._recognizer = None
-        self._gemini_client = None
+        self.cloud_model = cloud_model
 
         if not self.mock_mode:
             self._init_sherpa()
-            self._init_gemini()
 
     def _init_sherpa(self) -> None:
         """Initialize Sherpa-ONNX recognizer if model files exist."""
@@ -72,38 +70,26 @@ class SpeechRecognizer:
         except Exception:
             self._recognizer = None
 
-    def _init_gemini(self) -> None:
-        """Initialize Gemini client as audio fallback if available."""
-        api_key = os.environ.get("GEMINI_API_KEY")
-        if api_key and genai is not None:
-            try:
-                self._gemini_client = genai.Client(api_key=api_key)
-            except Exception:
-                self._gemini_client = None
-
-    def _transcribe_gemini(self, samples: np.ndarray, sample_rate: int = 16000) -> str:
-        """Fallback transcription via Gemini Flash-Lite."""
-        if self._gemini_client is None:
+    def _transcribe_cloud(self, samples: np.ndarray, sample_rate: int = 16000) -> str:
+        """OpenRouter's transcription endpoint; "" on any failure so Parakeet takes over."""
+        import requests
+        key = os.environ.get("OPENROUTER_API_KEY")
+        if not key:
             return ""
         try:
-            int16_samples = (np.clip(samples, -1.0, 1.0) * 32767).astype(np.int16)
             buf = io.BytesIO()
             with wave.open(buf, "wb") as wf:
                 wf.setnchannels(1)
                 wf.setsampwidth(2)
                 wf.setframerate(sample_rate)
-                wf.writeframes(int16_samples.tobytes())
-
-            resp = self._gemini_client.models.generate_content(
-                model="gemini-3.5-flash-lite",
-                contents=[
-                    types.Part.from_bytes(data=buf.getvalue(), mime_type="audio/wav"),
-                    "Transcribe the spoken command in this audio exactly. Return ONLY the transcribed text in lowercase, without quotes, timestamps, or commentary. If silence or unintelligible, return nothing.",
-                ],
-            )
-            text = resp.text.strip().rstrip(".?!,:;\"'").strip().lower()
-            return text
-        except Exception:
+                wf.writeframes((np.clip(samples, -1.0, 1.0) * 32767).astype(np.int16).tobytes())
+            r = requests.post(TRANSCRIBE_URL, headers={"Authorization": f"Bearer {key}"},
+                              data={"model": self.cloud_model, "prompt": VOCAB_HINT},
+                              files={"file": ("command.wav", buf.getvalue(), "audio/wav")}, timeout=15)
+            r.raise_for_status()
+            return r.json().get("text", "").strip().rstrip(".?!,:;\"'").strip().lower()
+        except Exception as e:
+            print(f"[STT]: cloud transcription failed ({e}), using the local model")
             return ""
 
     def transcribe(self, samples: np.ndarray, sample_rate: int = 16000) -> str:
@@ -128,27 +114,17 @@ class SpeechRecognizer:
         if 0.002 < max_amp < 0.25:
             samples = (samples / max_amp * 0.5).astype(np.float32)
 
-        # 1. Primary: On-device Sherpa-ONNX
-        if self._recognizer is not None:
+        text = self._transcribe_cloud(samples, sample_rate) if self.cloud_model else ""
+        if not text and self._recognizer is not None:
             try:
                 stream = self._recognizer.create_stream()
                 stream.accept_waveform(sample_rate, samples)
                 self._recognizer.decode_stream(stream)
                 text = stream.result.text.strip().rstrip(".?!,:;\"'").strip().lower()
-                if text:
-                    print(f'[STT]: "{text}" ({duration:.2f}s, peak {peak:.3f})')
-                    return text
             except Exception:
-                pass
-
-        # 2. Seamless Fallback: Gemini Cloud STT (only if audio has energy)
-        if max_amp < 0.002:
-            return ""
-
-        text = self._transcribe_gemini(samples, sample_rate)
+                text = ""
         if text:
             print(f'[STT]: "{text}" ({duration:.2f}s, peak {peak:.3f})')
         else:
             print(f"[STT]: no words recognised in {duration:.2f}s of audio (peak {peak:.3f})")
         return text
-

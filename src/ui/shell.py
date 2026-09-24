@@ -35,6 +35,15 @@ except ImportError:
 from src.config import load_settings, save_settings
 
 # One palette, graphite with an indigo accent; every widget takes its colors from here.
+# Tested with this app's set-of-marks prompt; "Load list" adds every OpenRouter vision model
+VISION_MODELS = ["qwen/qwen3-vl-8b-instruct", "google/gemini-3.1-flash-lite",
+                 "qwen/qwen3-vl-30b-a3b-instruct", "qwen/qwen3-vl-32b-instruct"]
+VOICE_ENGINES = {  # label -> OpenRouter transcription model ("" = on-device)
+    "On-device Parakeet (free, offline, ~0.5s)": "",
+    "Cloud gpt-4o-transcribe (best with names, ~1.3s)": "openai/gpt-4o-transcribe",
+    "Cloud gpt-4o-mini-transcribe (cheaper)": "openai/gpt-4o-mini-transcribe",
+}
+
 BG = "#14171D"          # window ground
 PANEL = "#1B1F27"       # raised surface
 PANEL_2 = "#232833"     # input/inset surface
@@ -58,7 +67,7 @@ STATE_WORD = {
 }
 FONT = "Segoe UI"
 PILL_H = 44
-PANEL_W, PANEL_H = 560, 640
+PANEL_W, PANEL_H = 560, 780
 
 
 def _round_rect(canvas: tk.Canvas, x1, y1, x2, y2, r, **kw):
@@ -127,6 +136,12 @@ class AppShell:
         style = ttk.Style()
         style.theme_use("clam")
         style.configure(".", background=PANEL, foreground=INK)
+        style.configure("Dark.TCombobox", fieldbackground=PANEL_2, background=PANEL_2, foreground=INK,
+                        arrowcolor=INK_2, bordercolor=LINE, lightcolor=PANEL_2, darkcolor=PANEL_2)
+        style.map("Dark.TCombobox", fieldbackground=[("readonly", PANEL_2)])
+        self.root.option_add("*TCombobox*Listbox.background", PANEL_2)
+        self.root.option_add("*TCombobox*Listbox.foreground", INK)
+        self.root.option_add("*TCombobox*Listbox.selectBackground", ACCENT)
 
     # ---------- pill ----------
 
@@ -286,13 +301,34 @@ class AppShell:
         self.key_status = self._label(tab, "Not tested yet", fg=INK_3, font=(FONT, 8))
         self.key_status.pack(fill="x", pady=(5, 0), **pad)
 
-        self._label(tab, "Model for looking at the screen", font=(FONT, 8)).pack(fill="x", pady=(14, 4), **pad)
+        self._label(tab, "Vision model (type any id, or load the full list)",
+                    font=(FONT, 8)).pack(fill="x", pady=(12, 4), **pad)
+        row = tk.Frame(tab, bg=PANEL)
+        row.pack(fill="x", **pad)
         self.model_var = tk.StringVar(value=s.get("vision_model", "qwen/qwen3-vl-8b-instruct"))
-        self._dropdown(tab, self.model_var, [
-            "qwen/qwen3-vl-8b-instruct",
-            "google/gemini-3.1-flash-lite",
-            "qwen/qwen3-vl-30b-a3b-instruct",
-        ]).pack(fill="x", **pad)
+        self.model_box = ttk.Combobox(row, textvariable=self.model_var, values=VISION_MODELS,
+                                      font=(FONT, 9), style="Dark.TCombobox")
+        self.model_box.pack(side="left", fill="x", expand=True, ipady=3)
+        tk.Button(row, text="Load list", command=self._load_models, relief="flat", bg=PANEL_2, fg=INK,
+                  activebackground=LINE, activeforeground=INK, font=(FONT, 9), cursor="hand2",
+                  bd=0, padx=12).pack(side="left", padx=(8, 0), ipady=4)
+
+        self._label(tab, "Vision endpoint (OpenAI-compatible) and key (blank = OpenRouter key)",
+                    font=(FONT, 8)).pack(fill="x", pady=(12, 4), **pad)
+        row = tk.Frame(tab, bg=PANEL)
+        row.pack(fill="x", **pad)
+        self.base_entry = self._entry(row)
+        self.base_entry.insert(0, s.get("vision_api_base") or "https://openrouter.ai/api/v1")
+        self.base_entry.pack(side="left", fill="x", expand=True, ipady=5)
+        self.vkey_entry = self._entry(row, show="•")
+        self.vkey_entry.insert(0, s.get("vision_api_key", ""))
+        self.vkey_entry.pack(side="left", padx=(8, 0), ipady=5)
+
+        self._label(tab, "Voice recognition", font=(FONT, 8)).pack(fill="x", pady=(12, 4), **pad)
+        current = s.get("stt_cloud_model", "")
+        self.voice_var = tk.StringVar(value=next((k for k, v in VOICE_ENGINES.items() if v == current),
+                                                 list(VOICE_ENGINES)[0]))
+        self._dropdown(tab, self.voice_var, list(VOICE_ENGINES)).pack(fill="x", **pad)
 
         self.jev_var = tk.BooleanVar(value=s.get("use_jev", True))
         tk.Checkbutton(tab, text="Use Jev to understand unusual wording (~0.7s, $0.00003)",
@@ -492,22 +528,50 @@ class AppShell:
             msg, color = f"Could not reach OpenRouter: {e}"[:60], MIC
         self.root.after(0, lambda: self.key_status.config(text=msg, fg=color))
 
+    def _load_models(self) -> None:
+        threading.Thread(target=self._load_models_worker, daemon=True).start()
+
+    def _load_models_worker(self) -> None:
+        """Every OpenRouter model that accepts images, cheapest first."""
+        import requests
+        try:
+            data = requests.get("https://openrouter.ai/api/v1/models", timeout=15).json()["data"]
+            vision = [m for m in data if "image" in m.get("architecture", {}).get("input_modalities", [])
+                      and "text" in m.get("architecture", {}).get("output_modalities", [])]
+            vision.sort(key=lambda m: float(m.get("pricing", {}).get("prompt") or 0))
+            ids = [m["id"] for m in vision]
+            msg = f"Loaded {len(ids)} vision models, cheapest first"
+        except Exception as e:
+            ids, msg = None, f"Could not load models: {e}"[:60]
+        def apply():
+            if ids:
+                self.model_box.config(values=ids)
+            self.save_status.config(text=msg)
+        self.root.after(0, apply)
+
     def _save_settings(self) -> None:
         values = {
             "openrouter_api_key": self.key_entry.get().strip(),
             "vision_model": self.model_var.get(),
             "use_jev": bool(self.jev_var.get()),
             "audio_device": self.device_var.get(),
+            "stt_cloud_model": VOICE_ENGINES[self.voice_var.get()],
+            "vision_api_base": self.base_entry.get().strip() or "https://openrouter.ai/api/v1",
+            "vision_api_key": self.vkey_entry.get().strip(),
         }
         save_settings(values)
         # Apply without a restart where the daemon allows it
         if self.daemon is not None:
             if getattr(self.daemon, "vision", None) is not None:
                 self.daemon.vision.model_name = values["vision_model"]
-                self.daemon.vision.api_key = values["openrouter_api_key"] or self.daemon.vision.api_key
+                self.daemon.vision.api_key = (values["vision_api_key"] or values["openrouter_api_key"]
+                                              or self.daemon.vision.api_key)
+                self.daemon.vision.api_base = values["vision_api_base"].rstrip("/")
                 self.daemon.vision.mock_mode = not self.daemon.vision.api_key
             if getattr(self.daemon, "router", None) is not None:
                 self.daemon.router.use_jev = values["use_jev"]
+            if getattr(self.daemon, "recognizer", None) is not None:
+                self.daemon.recognizer.cloud_model = values["stt_cloud_model"]
             dev = values["audio_device"]
             if getattr(self.daemon, "recorder", None) is not None:
                 self.daemon.recorder.device_index = int(dev.split(":")[0]) if dev[:1].isdigit() else None

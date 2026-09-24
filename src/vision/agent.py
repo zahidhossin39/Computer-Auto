@@ -22,7 +22,7 @@ try:
 except ImportError:
     pass
 
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 _session = requests.Session()  # keep-alive across the 2+ calls per step
 # Tried in order when the chosen model's provider is rate-limited (429) or down
 FALLBACK_MODELS = ["google/gemini-3.1-flash-lite", "qwen/qwen3-vl-30b-a3b-instruct"]
@@ -129,7 +129,9 @@ class VisionAgent:
         api_key: Optional[str] = None,
         model_name: str = "qwen/qwen3-vl-8b-instruct",
         mock_mode: bool = False,
+        api_base: str = OPENROUTER_BASE,
     ):
+        self.api_base = api_base.rstrip("/")  # OpenAI-compatible: OpenRouter, OpenAI, LM Studio...
         self.api_key = api_key or os.environ.get("OPENROUTER_API_KEY")
         self.model_name = model_name
         self.mock_mode = mock_mode or not self.api_key
@@ -141,14 +143,13 @@ class VisionAgent:
             {"type": "image_url", "image_url": {"url": image_url}},
             {"type": "text", "text": text},
         ]})
-        body = {
-            "model": self.model_name, "messages": messages, "temperature": 0,
+        body = {"model": self.model_name, "messages": messages, "temperature": 0}
+        if "openrouter.ai" in self.api_base:  # other endpoints reject the unknown field
             # If the provider is busy, OpenRouter tries these instead of failing the task
-            "models": [self.model_name] + [m for m in FALLBACK_MODELS if m != self.model_name],
-        }
+            body["models"] = [self.model_name] + [m for m in FALLBACK_MODELS if m != self.model_name]
         last = None
         for attempt in range(3):
-            r = _session.post(OPENROUTER_URL, headers={"Authorization": f"Bearer {self.api_key}"},
+            r = _session.post(self.api_base + "/chat/completions", headers={"Authorization": f"Bearer {self.api_key}"},
                               json=body, timeout=60)
             if r.status_code == 200:
                 return _parse_json(r.json()["choices"][0]["message"]["content"])

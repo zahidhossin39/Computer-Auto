@@ -39,6 +39,9 @@ class AppConfig:
     stt_model_dir: str = "models/parakeet-tdt-0.6b-int8"
     vision_model: str = "qwen/qwen3-vl-8b-instruct"  # OpenRouter vision model (tested: accurate, ~$0.0003/call)
     use_jev: bool = True  # Jev understands commands the trigger list misses
+    stt_cloud_model: str = ""  # "" = on-device Parakeet; else an OpenRouter transcription model
+    vision_api_base: str = "https://openrouter.ai/api/v1"  # any OpenAI-compatible endpoint
+    vision_api_key: str = ""  # "" = the OpenRouter key
 
 
 def load_intents(config_path: Optional[Path] = None) -> List[Intent]:
@@ -102,4 +105,7 @@ def load_config() -> AppConfig:
     if settings.get("vision_model"):
         config.vision_model = settings["vision_model"]
     config.use_jev = settings.get("use_jev", True)
+    config.stt_cloud_model = settings.get("stt_cloud_model", "")
+    config.vision_api_base = settings.get("vision_api_base") or config.vision_api_base
+    config.vision_api_key = settings.get("vision_api_key", "")
     return config
