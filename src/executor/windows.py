@@ -47,14 +47,23 @@ def type_text(text: str) -> None:
         pyautogui.write(text, interval=0.01)
         return
     import win32clipboard
-    win32clipboard.OpenClipboard()
-    try:
-        win32clipboard.EmptyClipboard()
-        win32clipboard.SetClipboardText(text, win32clipboard.CF_UNICODETEXT)
-    finally:
-        win32clipboard.CloseClipboard()
-    pyautogui.hotkey("ctrl", "v")  # ponytail: overwrites the user's clipboard; save/restore if it bites
 
+    def swap(new_text):
+        win32clipboard.OpenClipboard()
+        try:
+            has_text = win32clipboard.IsClipboardFormatAvailable(win32clipboard.CF_UNICODETEXT)
+            old = win32clipboard.GetClipboardData(win32clipboard.CF_UNICODETEXT) if has_text else None
+            win32clipboard.EmptyClipboard()
+            if new_text is not None:
+                win32clipboard.SetClipboardText(new_text, win32clipboard.CF_UNICODETEXT)
+            return old
+        finally:
+            win32clipboard.CloseClipboard()
+
+    saved = swap(text)
+    pyautogui.hotkey("ctrl", "v")
+    time.sleep(0.15)  # let the app read the clipboard before we put the user's text back
+    swap(saved)  # ponytail: restores text only; images/files on the clipboard are dropped
 
 try:
     import win32con
