@@ -1,6 +1,7 @@
 """Tier 2 Vision Agent: a vision model on OpenRouter plans GUI actions from screenshots."""
 
 import base64
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 import io
 import json
@@ -24,6 +25,7 @@ except ImportError:
 
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 _session = requests.Session()  # keep-alive across the 2+ calls per step
+_pool = ThreadPoolExecutor(max_workers=2)
 # Tried in order when the chosen model's provider is rate-limited (429) or down
 FALLBACK_MODELS = ["google/gemini-3.1-flash-lite", "qwen/qwen3-vl-30b-a3b-instruct"]
 
@@ -147,6 +149,7 @@ class VisionAgent:
         if "openrouter.ai" in self.api_base:  # other endpoints reject the unknown field
             # If the provider is busy, OpenRouter tries these instead of failing the task
             body["models"] = [self.model_name] + [m for m in FALLBACK_MODELS if m != self.model_name]
+            body["provider"] = {"sort": "latency"}  # measured: qwen 0.7s steady vs 0.9-2.0s
         last = None
         for attempt in range(3):
             r = _session.post(self.api_base + "/chat/completions", headers={"Authorization": f"Bearer {self.api_key}"},
@@ -181,7 +184,15 @@ class VisionAgent:
         elements = [e for e in uia.list_elements(hwnd) if _inside(e.rect, box)]
         listing = "\n".join(f"[{i}] {e.kind} '{e.name}'" for i, e in enumerate(elements, 1))
 
-        # Fast path: one obvious click on a named element needs no vision call at all.
+        image = _to_data_url(_draw_marks(crop, elements, box))
+        steps = "\n".join(f"{i}. {h}" for i, h in enumerate(history or [], 1)) or "(none yet)"
+        prompt = (f"User Request: {user_command}\nSteps already taken:\n{steps}\n"
+                  f"Marked elements:\n{listing or '(none)'}")
+
+        # Race: the vision model starts now; if Jev meanwhile finds one obvious click, that
+        # wins and the model's answer is simply dropped (saves Jev's ~0.7s when it says none).
+        planned = _pool.submit(self._plan, image, prompt, elements, crop.size, box)
+        # Fast path: one obvious click on a named element needs no vision result at all.
         if not history and elements:
             picked = jev.choose(
                 {"command": user_command, "elements_in_reading_order": listing},
@@ -194,11 +205,9 @@ class VisionAgent:
                 e = elements[int(picked[0]) - 1]
                 return VisionAction("click", *e.center, final=True, explanation=f"Click {e.kind} '{e.name}'")
 
-        image = _to_data_url(_draw_marks(crop, elements, box))
-        steps = "\n".join(f"{i}. {h}" for i, h in enumerate(history or [], 1)) or "(none yet)"
-        prompt = (f"User Request: {user_command}\nSteps already taken:\n{steps}\n"
-                  f"Marked elements:\n{listing or '(none)'}")
+        return planned.result()
 
+    def _plan(self, image: str, prompt: str, elements, crop_size, box) -> VisionAction:
         try:
             data = self._ask(image, prompt, SYSTEM_PROMPT)
             if data.get("action") == "click" and not data.get("element") and not data.get("target"):
@@ -217,7 +226,7 @@ class VisionAgent:
                 if field:
                     x, y = field.center
             elif data.get("action") == "click" and data.get("target"):
-                x, y = self._locate(data["target"], image, crop.size)
+                x, y = self._locate(data["target"], image, crop_size)
                 x, y = x + box[0], y + box[1]  # crop -> screen coordinates
             return VisionAction(
                 action=data.get("action", "none"),
