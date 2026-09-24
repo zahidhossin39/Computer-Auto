@@ -30,14 +30,14 @@ def test_execute_click_action(mock_click, agent):
     mock_click.assert_called_once_with(500, 300)
 
 
-@patch("pyautogui.write")
-def test_execute_type_action(mock_write, agent):
+@patch("src.vision.agent.type_text")
+def test_execute_type_action(mock_type, agent):
     """Verify executing a type action inputs text."""
     action = VisionAction(action="type", text="hello world", explanation="Type query")
     success = agent.execute_action(action)
 
     assert success is True
-    mock_write.assert_called_once_with("hello world", interval=0.01)
+    mock_type.assert_called_once_with("hello world")
 
 
 def test_destructive_vision_action_is_intercepted(agent):
@@ -64,13 +64,13 @@ def test_marked_element_click_uses_exact_rect():
 
 
 @patch("pyautogui.hotkey")
-@patch("pyautogui.write")
+@patch("src.vision.agent.type_text")
 @patch("pyautogui.click")
 def test_type_into_field_clicks_then_types_then_submits(mock_click, mock_write, mock_press, agent):
     """One 'type' action can focus a field, type, and press Enter: a search in one step."""
     agent.execute_action(VisionAction(action="type", x=50, y=60, text="linkedin", submit=True))
     mock_click.assert_called_once_with(50, 60)
-    mock_write.assert_called_once_with("linkedin", interval=0.01)
+    mock_write.assert_called_once_with("linkedin")
     mock_press.assert_called_once_with("enter")  # via send_hotkey, so the poller ignores it
 
 

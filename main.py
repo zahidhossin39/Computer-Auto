@@ -68,6 +68,7 @@ class ComputerAutoDaemon:
         "do it", "sure", "go ahead", "ok", "okay", "affirmative",
     }
     MAX_VISION_STEPS = 8  # ponytail: fixed cap per command, make configurable if tasks need more
+    REPEAT_WORDS = {"repeat", "repeat that", "again", "do that again", "do it again", "one more time"}
     CANCEL_WORDS = {
         "no", "nope", "cancel", "abort", "stop", "nevermind", "never mind", "dont", "don't",
     }
@@ -117,6 +118,7 @@ class ComputerAutoDaemon:
         self._listening_lock = threading.Lock()
         self._listening_active = False
         self._pending_confirmation: Optional[str] = None
+        self._last_command = ""  # for "repeat that"
         self.continuous = False  # a listening session is active: re-arm the mic after every command
 
         self.hotkey_listener = GlobalHotkeyListener(
@@ -158,7 +160,11 @@ class ComputerAutoDaemon:
             if hwnd and win32gui.IsIconic(hwnd):
                 print("[VISION]: target window was minimised, restoring it")
                 win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-                time.sleep(0.6)
+                for _ in range(10):  # wait for the restore, not a fixed guess
+                    time.sleep(0.1)
+                    if not win32gui.IsIconic(hwnd):
+                        break
+                time.sleep(0.25)  # and let it paint
         except Exception:
             pass
         return hwnd
@@ -404,6 +410,14 @@ class ComputerAutoDaemon:
                     # A different command supersedes the pending confirmation
                     self._pending_confirmation = None
 
+            norm = " ".join(re.sub(r"[^\w\s]", "", utterance).lower().split())
+            if norm in self.REPEAT_WORDS:
+                if not self._last_command:
+                    self.ui_log("[ANSWER]: Nothing to repeat yet")
+                    return
+                utterance = self._last_command
+            else:
+                self._last_command = utterance
             print(f"[UTTERANCE]: \"{utterance}\"")
             self.update_ui("processing", f"Routing: \"{utterance}\"", "Classifying intent...")
             self.ui_log(f"[COMMAND]: Processing \"{utterance}\"")

@@ -221,3 +221,11 @@ def test_mixed_chain_runs_known_part_then_vision(monkeypatch):
     daemon.handle_command("open notepad and click the third menu item")
     daemon.executor.launch_app.assert_called_once()
     assert daemon.vision.plan_action.call_args[0][0] == "click the third menu item"
+
+
+def test_repeat_that_runs_the_last_command_again():
+    daemon = _make_daemon()
+    daemon.executor = MagicMock()
+    daemon.handle_command("volume up")
+    daemon.handle_command("repeat that")
+    assert daemon.executor.execute_system_action.call_count == 2

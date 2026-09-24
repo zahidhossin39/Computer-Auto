@@ -679,3 +679,22 @@ intents:
     action:
       type: hotkey
       keys: ["win", "a"]
+  - name: scroll_down_little
+    category: hotkey
+    triggers:
+      - "scroll down a little"
+      - "scroll down a bit"
+      - "scroll a little"
+      - "little down"
+    action:
+      type: hotkey
+      keys: ["down", "down", "down"]
+  - name: scroll_up_little
+    category: hotkey
+    triggers:
+      - "scroll up a little"
+      - "scroll up a bit"
+      - "little up"
+    action:
+      type: hotkey
+      keys: ["up", "up", "up"]

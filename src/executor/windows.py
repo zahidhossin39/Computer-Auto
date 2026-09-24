@@ -45,14 +45,18 @@ def _shell_launch(target: str, args: str = "") -> bool:
 def send_hotkey(*keys: str) -> None:
     """Every key combo the app sends goes through here, so the hotkey poller ignores it."""
     hotkey.suppress()
-    pyautogui.hotkey(*keys)
+    if len(keys) > 1 and len(set(keys)) == 1:  # ["down"] * 3 means press it 3 times, not a chord
+        pyautogui.press(keys[0], presses=len(keys), interval=0.03)
+    else:
+        pyautogui.hotkey(*keys)
     hotkey.suppress()  # cover the key-up too
 
 
 def type_text(text: str) -> None:
-    """pyautogui.write silently drops anything outside ASCII (é, ñ, emoji): paste those."""
-    if text.isascii():
-        pyautogui.write(text, interval=0.01)
+    """Paste, don't type: simulated keystrokes came out scrambled in Windows 11 Notepad
+    ("lin ethree") and pyautogui.write drops non-ASCII. The user's clipboard is put back."""
+    if len(text) <= 2 and text.isascii():
+        pyautogui.write(text, interval=0.02)
         return
     import win32clipboard
 
@@ -262,13 +266,26 @@ class WindowsExecutor:
         return False
 
     def focus_window(self, hwnd: int) -> bool:
-        """Bring a window to the front. Windows refuses SetForegroundWindow to background
-        processes unless a key was just pressed, so tap Alt first (the standard workaround)."""
+        """Bring a window to the front. Windows blocks SetForegroundWindow from background
+        processes; tapping Alt (the usual trick) left apps in menu-key mode, eating the next
+        keys. Joining the foreground thread's input queue for a moment presses nothing."""
         try:
             if win32gui.IsIconic(hwnd):
                 win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-            send_hotkey("alt")
-            win32gui.SetForegroundWindow(hwnd)
+            fg = win32gui.GetForegroundWindow()
+            if fg == hwnd:
+                return True
+            import win32api
+            me = win32api.GetCurrentThreadId()
+            them = win32process.GetWindowThreadProcessId(fg)[0] if fg else 0
+            if them and them != me:
+                win32process.AttachThreadInput(me, them, True)
+            try:
+                win32gui.BringWindowToTop(hwnd)
+                win32gui.SetForegroundWindow(hwnd)
+            finally:
+                if them and them != me:
+                    win32process.AttachThreadInput(me, them, False)
             time.sleep(0.15)  # the switch is asynchronous
             return win32gui.GetForegroundWindow() == hwnd
         except Exception as e:
