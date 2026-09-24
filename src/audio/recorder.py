@@ -34,6 +34,7 @@ class AudioRecorder:
         self._speech_start_time = 0.0
         self._silence_start_time = 0.0
         self._recording_start_time = 0.0
+        self._noise = None  # learned background (peak, rms), see _process_vad
         self.speech_threshold_rms = 0.003
         self.speech_threshold_peak = 0.010
         self.silence_threshold_rms = 0.0025
@@ -41,6 +42,7 @@ class AudioRecorder:
         self.initial_silence_timeout = 4.5
         self.post_speech_silence = 0.8
         self.max_duration = 7.5
+        self.calibration_s = 0.3  # see _process_vad
 
     def _process_vad(self, chunk: np.ndarray) -> None:
         """Process chunk for voice activity and trigger silence auto-stop."""
@@ -52,7 +54,16 @@ class AudioRecorder:
         rms = float(np.sqrt(np.mean(chunk**2))) if len(chunk) > 0 else 0.0
         now = time.time()
 
-        is_voice = (rms > self.speech_threshold_rms) or (peak > self.speech_threshold_peak)
+        # The room's background level: fixed thresholds sat right at this mic's noise (peak
+        # ~0.008), so noise started "speech" and "silence" never came - every command ran to
+        # the 7.5s cap. The first 0.3s after the mic opens only measures the room.
+        if not self._speech_detected and now - self._recording_start_time < self.calibration_s:
+            n = self._noise or (peak, rms)
+            self._noise = (min(0.03, 0.8 * n[0] + 0.2 * peak), min(0.01, 0.8 * n[1] + 0.2 * rms))
+            return
+        noise_peak, noise_rms = self._noise or (0.0, 0.0)
+        is_voice = (rms > max(self.speech_threshold_rms, noise_rms * 3)
+                    or peak > max(self.speech_threshold_peak, noise_peak * 3))
 
         if not self._speech_detected:
             if is_voice:
@@ -70,7 +81,8 @@ class AudioRecorder:
                 self._recording_start_time = now
                 return
         else:
-            is_active = (rms > self.silence_threshold_rms) or (peak > self.silence_threshold_peak)
+            is_active = (rms > max(self.silence_threshold_rms, noise_rms * 2)
+                         or peak > max(self.silence_threshold_peak, noise_peak * 2))
             if is_active:
                 self._silence_start_time = 0.0
             else:
@@ -135,6 +147,7 @@ class AudioRecorder:
         self.last_error = None
         self._speech_detected = False
         self._silence_start_time = 0.0
+        self._noise = None
         self._recording_start_time = time.time()
         self._generation += 1
 

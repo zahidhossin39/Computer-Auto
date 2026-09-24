@@ -138,3 +138,26 @@ def test_silence_before_speech_keeps_waiting():
     time.sleep(0.1)
     recorder.on_silence.assert_not_called()
     assert sum(len(c) for c in recorder._buffer) <= 16000 * 2  # old silence was trimmed
+
+
+def test_vad_stops_in_a_noisy_room():
+    """Background at peak 0.009 used to count as speech forever; it must read as silence."""
+    import time
+    fired = []
+    recorder = AudioRecorder(sample_rate=16000)
+    recorder.on_silence = lambda: fired.append(1)
+    recorder.is_recording = True
+    recorder._recording_start_time = time.time()
+    noise = np.ones((1600, 1), dtype=np.float32) * 0.009
+    recorder.feed_audio_chunk(noise)  # first 0.3s: the recorder learns this is the room
+    recorder._recording_start_time -= 1.0
+    recorder.feed_audio_chunk(noise)
+    assert not recorder._speech_detected
+    recorder.feed_audio_chunk(np.ones((1600, 1), dtype=np.float32) * 0.2)  # speech
+    assert recorder._speech_detected
+    recorder.post_speech_silence = 0.05
+    recorder.feed_audio_chunk(noise)
+    time.sleep(0.06)
+    recorder.feed_audio_chunk(noise)
+    time.sleep(0.05)
+    assert fired == [1]
