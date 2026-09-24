@@ -140,5 +140,4 @@ def test_sites_files_and_dictation(router, monkeypatch):
     assert router.route("go to youtube").intent.action.target == "https://www.youtube.com"
     assert "search_query=lofi+music" in router.route("search youtube for lofi music").intent.action.target
     assert "q=cats" in router.route("search the web for cats").intent.action.target
-    assert router.route("type hello comma world new line bye").intent.action.target == "hello, world
-bye"
+    assert router.route("type hello comma world new line bye").intent.action.target == "hello, world\nbye"
