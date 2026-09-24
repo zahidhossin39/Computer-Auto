@@ -250,15 +250,25 @@ class WindowsExecutor:
 
         return False
 
+    def focus_window(self, hwnd: int) -> bool:
+        """Bring a window to the front. Windows refuses SetForegroundWindow to background
+        processes unless a key was just pressed, so tap Alt first (the standard workaround)."""
+        try:
+            if win32gui.IsIconic(hwnd):
+                win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+            pyautogui.press("alt")
+            win32gui.SetForegroundWindow(hwnd)
+            time.sleep(0.15)  # the switch is asynchronous
+            return win32gui.GetForegroundWindow() == hwnd
+        except Exception as e:
+            print(f"[EXECUTOR]: could not focus window ({e})")
+            return False
+
     def _focus_target(self) -> None:
         """Keys go to the focused window; if that is our own shell, hand focus back first."""
         hwnd = self._get_active_window()
         if hwnd and win32gui and hwnd != win32gui.GetForegroundWindow():
-            try:
-                win32gui.SetForegroundWindow(hwnd)
-                time.sleep(0.15)
-            except Exception:
-                pass
+            self.focus_window(hwnd)
 
     def run_action(self, action: IntentAction) -> bool:
         """hotkey / open_app / type_text / open_url intents: no vision call needed."""
@@ -272,6 +282,10 @@ class WindowsExecutor:
             elif action.type == "open_app" and action.target:
                 explorer = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "explorer.exe")
                 return _shell_launch(explorer, f"shell:AppsFolder\\{action.target}")
+            elif action.type == "focus_window" and action.target:
+                return self.focus_window(int(action.target))
+            elif action.type == "close_window" and action.target:
+                win32gui.PostMessage(int(action.target), win32con.WM_CLOSE, 0, 0)
             elif action.type == "open_url" and action.target:
                 return _shell_launch(action.target)
             else:

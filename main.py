@@ -336,7 +336,11 @@ class ComputerAutoDaemon:
             else:
                 print(f"[ERROR]: Could not launch '{intent.action.target}'.")
                 self.ui_log(f"[ERROR]: Failed to launch '{intent.action.target}'")
-        elif intent.action.type in ("hotkey", "open_app", "type_text", "open_url"):
+        elif intent.action.type == "say":
+            print(f"[ANSWER]: {intent.action.target}")
+            self.ui_log(f"[ANSWER]: {intent.action.target}")
+            self.tts.speak(intent.action.target)
+        elif intent.action.type in ("hotkey", "open_app", "type_text", "open_url", "focus_window", "close_window"):
             ok = self.executor.run_action(intent.action)
             print(f"[EXECUTED]: {intent.action.type} {intent.action.keys or intent.action.command or intent.action.target} ({'ok' if ok else 'failed'})")
             self.ui_log(f"[EXECUTED]: {intent.name} ({'ok' if ok else 'failed'})")

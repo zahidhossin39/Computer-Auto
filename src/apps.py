@@ -68,6 +68,53 @@ def find(spoken: str) -> Optional[Tuple[str, str]]:
     return None
 
 
+def open_windows() -> list:
+    """(hwnd, title, exe name) of visible top-level windows, front-most first, minus ours."""
+    import os
+    import win32api
+    import win32con
+    import win32gui
+    import win32process
+    out = []
+
+    def add(hwnd, _):
+        title = win32gui.GetWindowText(hwnd)
+        if not title or not win32gui.IsWindowVisible(hwnd) or win32gui.GetWindow(hwnd, win32con.GW_OWNER):
+            return
+        pid = win32process.GetWindowThreadProcessId(hwnd)[1]
+        if pid == os.getpid():
+            return
+        try:
+            h = win32api.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+            exe = os.path.basename(win32process.GetModuleFileNameEx(h, 0)).lower()
+        except Exception:
+            exe = ""
+        out.append((hwnd, title, exe))
+
+    win32gui.EnumWindows(add, None)
+    return out
+
+
+def find_window(spoken: str):
+    """(hwnd, title) of the open window the user named ("chrome", "the notepad"), or None."""
+    words = [w for w in spoken.lower().split() if w not in ("the", "my", "a", "this", "that", "it", "window", "app")]
+    if not words:
+        return None
+    wins = open_windows()
+    for hwnd, title, exe in wins:  # front-most first, so "chrome" means the Chrome you last used
+        hay = f"{title.lower()} {exe[:-4]}"
+        if all(w in hay for w in words):
+            return hwnd, title
+    # "note pad", "vs code": resolve through the app index, then match its name
+    app = find(" ".join(words))
+    if app:
+        name = app[0].lower()
+        for hwnd, title, exe in wins:
+            if name in title.lower() or name.split()[-1] in exe:
+                return hwnd, title
+    return None
+
+
 if __name__ == "__main__":
     load()
     for s in ("claude", "cloud code", "chrome", "discord", "vs code", "calculator", "banana split"):

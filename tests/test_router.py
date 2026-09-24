@@ -111,3 +111,14 @@ def test_one_word_triggers_do_not_fire_inside_sentences(router):
     assert router.route("print").intent.name == "print"
     assert router.route("print my name").is_vision
     assert router.route("cut the grass").is_vision
+
+
+def test_close_an_app_that_is_not_open_does_not_close_the_front_window(router, monkeypatch):
+    """Jev mapped "close spotify" to "close the active window"; it must just say so instead."""
+    from src import apps
+    monkeypatch.setattr(apps, "find_window", lambda name: None)
+    res = router.route("close spotify")
+    assert res.intent.action.type == "say"
+    monkeypatch.setattr(apps, "find_window", lambda name: (123, "Spotify Premium"))
+    res = router.route("switch to spotify")
+    assert res.intent.action.type == "focus_window" and res.intent.action.target == "123"

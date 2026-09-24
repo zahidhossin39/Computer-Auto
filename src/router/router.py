@@ -122,6 +122,20 @@ class CommandRouter:
         if m:
             url = "https://www.google.com/search?q=" + quote_plus(m.group(1))
             return _make("web_search", IntentAction("open_url", target=url))
+        m = re.match(r"(?:switch to|go to|focus|show me|bring up)\s+(.+)$", clean)
+        if m:
+            win = apps.find_window(m.group(1))
+            if win:
+                return _make("focus_window", IntentAction("focus_window", target=str(win[0]), command=win[1]))
+        m = re.match(r"(?:close|quit|exit)\s+(.+)$", clean)
+        if m and m.group(1) not in ("tab", "this tab", "window", "this", "it"):
+            win = apps.find_window(m.group(1))
+            if win:
+                intent = _make("close_window", IntentAction("close_window", target=str(win[0]), command=win[1]))
+                intent.is_destructive = True  # same as "close window": ask before closing
+                return intent
+            # Otherwise Jev reads "close spotify" as "close the active window": never guess here
+            return _make("not_open", IntentAction("say", target=f"{m.group(1)} is not open"))
         m = re.match(r"(?:open|launch|start|run)\s+(.+?)(?:\s+app)?$", clean)
         if m:
             found = apps.find(m.group(1))
