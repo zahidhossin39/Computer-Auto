@@ -71,6 +71,16 @@ class DoubleTapDetector:
             self.on_panic()
 
 
+_suppress_until = 0.0
+
+
+def suppress(seconds: float = 0.5) -> None:
+    """The app is about to press keys itself (ctrl+t, esc): GetAsyncKeyState can't tell those
+    from the user's, so ignore Ctrl/Esc edges for a moment or they stop the session."""
+    global _suppress_until
+    _suppress_until = max(_suppress_until, time.time() + seconds)
+
+
 class GlobalHotkeyListener:
     """Global keyboard listener using native Windows GetAsyncKeyState polling.
 
@@ -102,7 +112,8 @@ class GlobalHotkeyListener:
                 lctrl_state = win32api.GetAsyncKeyState(VK_LCONTROL)
                 ctrl_is_pressed = bool(lctrl_state & 0x8000)
 
-                if ctrl_is_pressed and not ctrl_was_pressed:
+                ours = time.time() < _suppress_until  # keys the app is sending itself
+                if ctrl_is_pressed and not ctrl_was_pressed and not ours:
                     # Key just went down (edge trigger)
                     self.detector.handle_tap()
                 ctrl_was_pressed = ctrl_is_pressed
@@ -111,7 +122,7 @@ class GlobalHotkeyListener:
                 esc_state = win32api.GetAsyncKeyState(VK_ESCAPE)
                 esc_is_pressed = bool(esc_state & 0x8000)
 
-                if esc_is_pressed and not esc_was_pressed:
+                if esc_is_pressed and not esc_was_pressed and not ours:
                     self.detector.handle_panic()
                 esc_was_pressed = esc_is_pressed
 

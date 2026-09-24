@@ -9,6 +9,7 @@ import time
 from typing import Optional
 import pyautogui
 from src.config import IntentAction
+from src.trigger import hotkey
 
 
 def ensure_default_desktop() -> None:
@@ -41,6 +42,13 @@ def _shell_launch(target: str, args: str = "") -> bool:
         return False
 
 
+def send_hotkey(*keys: str) -> None:
+    """Every key combo the app sends goes through here, so the hotkey poller ignores it."""
+    hotkey.suppress()
+    pyautogui.hotkey(*keys)
+    hotkey.suppress()  # cover the key-up too
+
+
 def type_text(text: str) -> None:
     """pyautogui.write silently drops anything outside ASCII (é, ñ, emoji): paste those."""
     if text.isascii():
@@ -61,7 +69,7 @@ def type_text(text: str) -> None:
             win32clipboard.CloseClipboard()
 
     saved = swap(text)
-    pyautogui.hotkey("ctrl", "v")
+    send_hotkey("ctrl", "v")
     time.sleep(0.15)  # let the app read the clipboard before we put the user's text back
     swap(saved)  # ponytail: restores text only; images/files on the clipboard are dropped
 
@@ -102,6 +110,7 @@ class WindowsExecutor:
 
     def _send_vk_code(self, vk_code: int) -> None:
         """Send virtual key using native Windows keybd_event API."""
+        hotkey.suppress()
         ctypes.windll.user32.keybd_event(vk_code, 0, KEYEVENTF_EXTENDEDKEY, 0)
         ctypes.windll.user32.keybd_event(vk_code, 0, KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP, 0)
 
@@ -119,14 +128,14 @@ class WindowsExecutor:
             self._send_vk_code(key_map[key_name])
         else:
             try:
-                pyautogui.press(key_name)
+                send_hotkey(key_name)
             except Exception:
                 pass
 
     def _hotkey(self, *keys: str) -> None:
         """Send combined hotkey press."""
         try:
-            pyautogui.hotkey(*keys)
+            send_hotkey(*keys)
         except Exception:
             pass
 
@@ -256,7 +265,7 @@ class WindowsExecutor:
         try:
             if win32gui.IsIconic(hwnd):
                 win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-            pyautogui.press("alt")
+            send_hotkey("alt")
             win32gui.SetForegroundWindow(hwnd)
             time.sleep(0.15)  # the switch is asynchronous
             return win32gui.GetForegroundWindow() == hwnd
@@ -275,7 +284,7 @@ class WindowsExecutor:
         try:
             if action.type == "hotkey" and action.keys:
                 self._focus_target()
-                pyautogui.hotkey(*action.keys)
+                send_hotkey(*action.keys)
             elif action.type == "type_text" and action.target:
                 self._focus_target()
                 type_text(action.target)

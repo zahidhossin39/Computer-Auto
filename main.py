@@ -237,6 +237,7 @@ class ComputerAutoDaemon:
                 with self._listening_lock:
                     self._listening_active = False
                 self.hotkey_listener.detector.is_listening = False
+                self.continuous = False  # else the session looks on with nothing listening
                 self.update_ui(
                     "error",
                     "Microphone failed to start",
@@ -447,6 +448,8 @@ class ComputerAutoDaemon:
                         history[-1] += " (the screen did not change)"
                     prev_thumb = thumb
                     action = self.vision.plan_action(utterance, img, history, hwnd=hwnd)
+                    if not self._is_executing:  # Esc while the model was thinking: don't act
+                        return
                     print(f"[AGENT STEP {step}]: {action.action} at ({action.x}, {action.y}) | {action.explanation}")
                     self.ui_log(f"[AGENT STEP {step}]: {action.action} at ({action.x}, {action.y}) -> {action.explanation}")
 

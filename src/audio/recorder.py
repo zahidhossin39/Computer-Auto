@@ -35,6 +35,7 @@ class AudioRecorder:
         self._silence_start_time = 0.0
         self._recording_start_time = 0.0
         self._noise = None  # learned background (peak, rms), see _process_vad
+        self._last_good = None  # (device, rate, channels) that last opened fine
         self.speech_threshold_rms = 0.003
         self.speech_threshold_peak = 0.010
         self.silence_threshold_rms = 0.0025
@@ -168,8 +169,9 @@ class AudioRecorder:
                 pass
             self._stream = None
 
-        # Build prioritized list of (device, sample_rate, channels) candidate configurations
-        candidates = []
+        # Build prioritized list of (device, sample_rate, channels) candidate configurations.
+        # The last one that opened goes first: skips re-probing the device on every command.
+        candidates = [self._last_good] if self._last_good and self._last_good[0] == self.device_index else []
         if self.device_index is not None:
             try:
                 info = sd.query_devices(self.device_index)
@@ -220,6 +222,7 @@ class AudioRecorder:
                 self.actual_sample_rate = sr
                 self.actual_channels = ch
                 self.last_error = None
+                self._last_good = (dev, sr, ch)
                 opened = True
                 break
             except Exception as exc:

@@ -63,7 +63,7 @@ def test_marked_element_click_uses_exact_rect():
     assert (a.x, a.y) == (5, 5)
 
 
-@patch("pyautogui.press")
+@patch("pyautogui.hotkey")
 @patch("pyautogui.write")
 @patch("pyautogui.click")
 def test_type_into_field_clicks_then_types_then_submits(mock_click, mock_write, mock_press, agent):
@@ -71,7 +71,7 @@ def test_type_into_field_clicks_then_types_then_submits(mock_click, mock_write, 
     agent.execute_action(VisionAction(action="type", x=50, y=60, text="linkedin", submit=True))
     mock_click.assert_called_once_with(50, 60)
     mock_write.assert_called_once_with("linkedin", interval=0.01)
-    mock_press.assert_called_once_with("enter")
+    mock_press.assert_called_once_with("enter")  # via send_hotkey, so the poller ignores it
 
 
 def test_type_without_a_target_lands_in_the_text_area():

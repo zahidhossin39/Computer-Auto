@@ -15,7 +15,7 @@ import requests
 
 from src import jev
 from src.executor.guardrail import SafetyGuardrail
-from src.executor.windows import type_text
+from src.executor.windows import send_hotkey, type_text
 from src.vision import uia
 
 try:
@@ -277,10 +277,10 @@ class VisionAgent:
                     pyautogui.click(action.x, action.y)  # focus the field first
                 type_text(action.text)
                 if action.submit:
-                    pyautogui.press("enter")
+                    send_hotkey("enter")
                 return True
             elif action.action == "hotkey" and action.keys:
-                pyautogui.hotkey(*action.keys)
+                send_hotkey(*action.keys)
                 return True
             elif action.action == "wait":
                 return True
