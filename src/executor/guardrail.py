@@ -22,6 +22,14 @@ class SafetyGuardrail:
         r"\bcheckout\b",
         r"\bsend\s+email\b",
         r"\bsend\s+message\b",
+        r"\buninstall\b",
+        r"\btrash\b",
+        r"\brecycle\s+bin\b",
+        r"\bsubscribe\b",
+        r"\btransfer\b",
+        r"\bwire\b",
+        r"\bsell\b",
+        r"\bplace\s+order\b",
     ]
 
     def __init__(self, additional_patterns: List[str] = None):

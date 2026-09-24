@@ -70,6 +70,18 @@ PILL_H = 44
 PANEL_W, PANEL_H = 560, 780
 
 
+MAX_LOG_LINES = 400
+
+
+def _virtual_screen(w: int, h: int) -> tuple:
+    """(left, top, width, height) spanning every monitor; the primary screen elsewhere."""
+    try:
+        m = ctypes.windll.user32.GetSystemMetrics
+        return m(76), m(77), m(78), m(79)  # SM_X/Y/CX/CYVIRTUALSCREEN
+    except Exception:
+        return 0, 0, w, h
+
+
 def _round_rect(canvas: tk.Canvas, x1, y1, x2, y2, r, **kw):
     """Rounded rectangle: Tk has no primitive, and square corners read as a dialog."""
     pts = [x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y2 - r, x2, y2, x2 - r, y2,
@@ -376,9 +388,12 @@ class AppShell:
         if bottom_right or not hasattr(self, "_pos"):
             x, y = screen_w - w - 28, screen_h - h - 70
         else:
+            # Clamp to the whole virtual desktop, not the primary screen: a pill dragged to a
+            # second monitor snapped back on every state change.
+            vx, vy, vw, vh = _virtual_screen(screen_w, screen_h)
             x, y = self._pos
-            x = min(max(0, x), screen_w - w)
-            y = min(max(0, y), screen_h - h)
+            x = min(max(vx, x), vx + vw - w)
+            y = min(max(vy, y), vy + vh - h)
         self._pos = (x, y)
         self.root.geometry(f"{w}x{h}+{x}+{y}")
 
@@ -459,12 +474,15 @@ class AppShell:
     def log(self, message: str) -> None:
         line = f"{datetime.now().strftime('%H:%M:%S')}  {message}"
         self._log_lines.append(line)
+        del self._log_lines[:-MAX_LOG_LINES]
         if self.root and hasattr(self, "log_text"):
             self.root.after(0, self._append_log, line)
 
     def _append_log(self, line: str) -> None:
         self.log_text.configure(state="normal")
         self.log_text.insert("end", line + "\n")
+        if int(self.log_text.index("end-1c").split(".")[0]) > MAX_LOG_LINES:  # it runs for days
+            self.log_text.delete("1.0", "101.0")
         self.log_text.see("end")
         self.log_text.configure(state="disabled")
 
@@ -513,11 +531,11 @@ class AppShell:
 
     def _test_key(self) -> None:
         self.key_status.config(text="Testing…", fg=INK_3)
-        threading.Thread(target=self._test_key_worker, daemon=True).start()
+        key = self.key_entry.get().strip()  # Tk widgets only on the Tk thread
+        threading.Thread(target=self._test_key_worker, args=(key,), daemon=True).start()
 
-    def _test_key_worker(self) -> None:
+    def _test_key_worker(self, key: str) -> None:
         import requests
-        key = self.key_entry.get().strip()
         try:
             r = requests.get("https://openrouter.ai/api/v1/credits",
                              headers={"Authorization": f"Bearer {key}"}, timeout=15)

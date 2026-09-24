@@ -37,7 +37,7 @@ try:
 except Exception:
     pass
 
-from src.config import load_config
+from src.config import load_config, load_settings
 from src import apps
 from src.audio.recorder import AudioRecorder
 from src.trigger.hotkey import GlobalHotkeyListener
@@ -90,8 +90,9 @@ class ComputerAutoDaemon:
         self.ui_mode = ui_mode
         self.config = load_config()
 
-        # Check for explicit audio device index in environment
-        dev_idx = None
+        # The mic picked in Settings ("3: Microphone ..."), else AUDIO_DEVICE_INDEX
+        saved_dev = load_settings().get("audio_device", "")
+        dev_idx = int(saved_dev.split(":")[0]) if saved_dev[:1].isdigit() else None
         dev_env = os.environ.get("AUDIO_DEVICE_INDEX")
         if dev_env is not None and dev_env.strip().isdigit():
             dev_idx = int(dev_env.strip())

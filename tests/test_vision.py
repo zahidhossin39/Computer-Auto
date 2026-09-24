@@ -101,3 +101,10 @@ def test_mouse_actions_beyond_click(monkeypatch):
     fake.doubleClick.assert_called_with(1, 2)
     assert v.execute_action(VisionAction("right_click", 3, 4))
     fake.rightClick.assert_called_with(3, 4)
+
+
+def test_json_reply_with_echoed_schema_still_parses():
+    """A greedy regex glued the echoed schema and the answer into invalid JSON: the task died."""
+    from src.vision.agent import _parse_json
+    reply = 'Schema {"action": "click"|"type"} so: {"action": "hotkey", "keys": ["ctrl", "s"]}'
+    assert _parse_json(reply) == {"action": "hotkey", "keys": ["ctrl", "s"]}

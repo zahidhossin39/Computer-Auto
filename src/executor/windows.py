@@ -69,9 +69,11 @@ def type_text(text: str) -> None:
             win32clipboard.CloseClipboard()
 
     saved = swap(text)
-    send_hotkey("ctrl", "v")
-    time.sleep(0.15)  # let the app read the clipboard before we put the user's text back
-    swap(saved)  # ponytail: restores text only; images/files on the clipboard are dropped
+    try:
+        send_hotkey("ctrl", "v")
+        time.sleep(0.15)  # let the app read the clipboard before we put the user's text back
+    finally:
+        swap(saved)  # ponytail: restores text only; images/files on the clipboard are dropped
 
 try:
     import win32con

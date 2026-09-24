@@ -55,3 +55,10 @@ def test_confirmation_prompt_formatting():
     prompt = guard.format_confirmation_prompt("delete document.txt")
     assert "delete document.txt" in prompt
     assert "proceed" in prompt.lower() or "sure" in prompt.lower()
+
+
+def test_more_destructive_verbs_need_confirmation():
+    from src.executor.guardrail import SafetyGuardrail
+    g = SafetyGuardrail()
+    for text in ("Clicking Uninstall", "Move to Trash", "empty the recycle bin", "confirm the transfer"):
+        assert g.requires_confirmation(text), text

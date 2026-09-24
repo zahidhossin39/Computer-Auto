@@ -26,7 +26,7 @@ except ImportError:
 
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 _session = requests.Session()  # keep-alive across the 2+ calls per step
-_pool = ThreadPoolExecutor(max_workers=2)
+_pool = ThreadPoolExecutor(max_workers=4)  # a call Jev beat keeps running; don't let it block the next
 # Tried in order when the chosen model's provider is rate-limited (429) or down
 FALLBACK_MODELS = ["google/gemini-3.1-flash-lite", "qwen/qwen3-vl-30b-a3b-instruct"]
 
@@ -122,8 +122,20 @@ def _draw_marks(img: Image.Image, elements, box) -> Image.Image:
 
 
 def _parse_json(text: str) -> dict:
-    """Models sometimes wrap JSON in prose or code fences; take the outermost object."""
-    return json.loads(re.search(r"[{].*[}]", text, re.S).group(0))
+    """Models wrap JSON in prose or fences, or echo the schema first: scan every {...} and
+    keep the last one that parses and names an action (a greedy regex spliced two together)."""
+    dec, found, i = json.JSONDecoder(), None, text.find("{")
+    while i != -1:
+        try:
+            obj, end = dec.raw_decode(text, i)
+            if isinstance(obj, dict) and "action" in obj:
+                found = obj
+            i = text.find("{", end)
+        except ValueError:
+            i = text.find("{", i + 1)
+    if found is None:
+        raise ValueError(f"no JSON action in model reply: {text[:80]!r}")
+    return found
 
 
 class VisionAgent:
