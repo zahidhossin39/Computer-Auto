@@ -15,6 +15,7 @@ import requests
 
 from src import jev
 from src.executor.guardrail import SafetyGuardrail
+from src.executor.windows import type_text
 from src.vision import uia
 
 try:
@@ -274,7 +275,7 @@ class VisionAgent:
             elif action.action == "type" and action.text:
                 if action.x is not None and action.y is not None:
                     pyautogui.click(action.x, action.y)  # focus the field first
-                pyautogui.write(action.text, interval=0.01)
+                type_text(action.text)
                 if action.submit:
                     pyautogui.press("enter")
                 return True

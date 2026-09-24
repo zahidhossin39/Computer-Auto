@@ -352,6 +352,9 @@ class AppShell:
         box = tk.Text(tab, bg=PANEL, fg=INK_2, relief="flat", font=(FONT, 9), wrap="word",
                       padx=8, pady=8, state="normal", highlightthickness=0)
         intents = getattr(getattr(self.daemon, "config", None), "intents", []) or []
+        box.insert("end", "Say it your way\n", "cmd")
+        box.insert("end", "    open <any installed app>  ·  type <text>  ·  go to <site.com>  ·  google <query>\n"
+                          "    chain them: open notepad and type hello\n\n", "alt")
         if intents:
             for intent in intents:
                 box.insert("end", f"{intent.triggers[0]}\n", "cmd")

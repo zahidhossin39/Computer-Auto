@@ -41,6 +41,21 @@ def _shell_launch(target: str, args: str = "") -> bool:
         return False
 
 
+def type_text(text: str) -> None:
+    """pyautogui.write silently drops anything outside ASCII (é, ñ, emoji): paste those."""
+    if text.isascii():
+        pyautogui.write(text, interval=0.01)
+        return
+    import win32clipboard
+    win32clipboard.OpenClipboard()
+    try:
+        win32clipboard.EmptyClipboard()
+        win32clipboard.SetClipboardText(text, win32clipboard.CF_UNICODETEXT)
+    finally:
+        win32clipboard.CloseClipboard()
+    pyautogui.hotkey("ctrl", "v")  # ponytail: overwrites the user's clipboard; save/restore if it bites
+
+
 try:
     import win32con
     import win32gui
@@ -244,7 +259,7 @@ class WindowsExecutor:
                 pyautogui.hotkey(*action.keys)
             elif action.type == "type_text" and action.target:
                 self._focus_target()
-                pyautogui.write(action.target, interval=0.01)
+                type_text(action.target)
             elif action.type == "open_app" and action.target:
                 explorer = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "explorer.exe")
                 return _shell_launch(explorer, f"shell:AppsFolder\\{action.target}")
