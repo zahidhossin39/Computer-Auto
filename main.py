@@ -387,8 +387,7 @@ class ComputerAutoDaemon:
                 self._set_ui_visible(False)
                 # Look -> act -> look again, until the model says done. Panic clears _is_executing.
                 history: list = []
-                last_sig = None
-                repeats = 0
+                seen: set = set()  # every action taken this command; a repeat means a loop
                 for step in range(1, self.MAX_VISION_STEPS + 1):
                     if not self._is_executing:
                         return
@@ -419,9 +418,7 @@ class ComputerAutoDaemon:
 
                     # typing has no coordinates of its own, so compare it by its text
                     sig = (action.action, action.text) if action.action == "type" else (action.action, action.x, action.y)
-                    repeats = repeats + 1 if sig == last_sig else 0
-                    last_sig = sig
-                    if repeats >= 1:  # proposed twice in a row: it already happened or does nothing
+                    if sig in seen:  # proposed before: it already happened or does nothing
                         print("[TIER 2 VISION]: same action had no effect, stopping.")
                         self.update_ui("ready", "Stopped: action had no effect", action.explanation[:45])
                         self.ui_log("[TIER 2 VISION]: Same action repeated with no effect -> stopped.")
@@ -429,6 +426,11 @@ class ComputerAutoDaemon:
 
                     self.update_ui("executing", f"Vision step {step}: {action.action}", action.explanation[:45])
                     ok = self.vision.execute_action(action)
+                    seen.add(sig)
+                    if ok and action.final:
+                        print("[TIER 2 VISION]: final action done.")
+                        self.update_ui("ready", "Visual Task Completed", action.explanation[:45])
+                        return
                     history.append(f"{action.action}: {action.explanation}" + ("" if ok else " (FAILED)"))
                     time.sleep(0.5)  # let the screen settle before the next look
 

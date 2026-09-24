@@ -182,3 +182,16 @@ def test_vision_loop_stops_when_action_has_no_effect():
     daemon.handle_command("put hi everywhere")
     assert daemon.vision.plan_action.call_count == 2  # stops as soon as it repeats itself
     assert daemon.vision.execute_action.call_count == 1  # and never does it twice
+
+
+def test_vision_loop_ends_after_final_action():
+    """'open new tab' clicked New Tab, then pressed ctrl+t twice more: a final action ends the task."""
+    from src.vision.agent import VisionAction
+    daemon = _make_daemon()
+    daemon.capture = MagicMock()
+    daemon.capture.grab_screen.return_value = (MagicMock(), 100, 100)
+    daemon.vision = MagicMock()
+    daemon.vision.plan_action.return_value = VisionAction("click", 5, 5, final=True, explanation="New Tab")
+    daemon.vision.execute_action.return_value = True
+    daemon.handle_command("put a tab somewhere")
+    assert daemon.vision.plan_action.call_count == 1

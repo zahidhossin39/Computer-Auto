@@ -36,6 +36,7 @@ class VisionAction:
     text: Optional[str] = None
     keys: List[str] = field(default_factory=list)
     submit: bool = False  # press Enter after typing
+    final: bool = False  # this action alone finishes the request: no look afterwards
     explanation: str = ""
 
 
@@ -52,6 +53,9 @@ still loading. If a step you already took did not change the screen, do somethin
 instead of repeating it: a keyboard action ("hotkey") is often more reliable than a click, and
 a "type" action may also carry the "element" of the field to type into (it is clicked first)
 and "submit": true to press Enter afterwards, so a search is ONE action, not three.
+Set "final": true when this one action completes the whole request (opening a tab, pressing a
+shortcut, clicking the one button asked for, submitting a search): the task then ends without
+another look, so the same thing is never done twice.
 
 Clickable elements are marked on the screenshot with red numbered boxes and listed as
 "[number] Kind 'Name'". For a click, answer with that number in "element". Only if the thing
@@ -64,6 +68,7 @@ You MUST respond strictly with valid JSON conforming to this schema:
   "target": string (visual description, only when no marked element fits),
   "text": string (text to type, if action is type),
   "submit": true/false (press Enter after typing, e.g. to run a search),
+  "final": true/false (this action alone completes the request),
   "keys": list of strings (keys to press, e.g. ["ctrl", "c"]),
   "explanation": string (brief explanation of what you are clicking/doing)
 }
@@ -186,7 +191,7 @@ class VisionAgent:
             )
             if picked and picked[0] != "none" and picked[1] >= JEV_CLICK_CONFIDENCE:
                 e = elements[int(picked[0]) - 1]
-                return VisionAction("click", *e.center, explanation=f"Click {e.kind} '{e.name}'")
+                return VisionAction("click", *e.center, final=True, explanation=f"Click {e.kind} '{e.name}'")
 
         image = _to_data_url(_draw_marks(crop, elements, box))
         steps = "\n".join(f"{i}. {h}" for i, h in enumerate(history or [], 1)) or "(none yet)"
@@ -219,6 +224,7 @@ class VisionAgent:
                 y=y,
                 text=data.get("text"),
                 submit=bool(data.get("submit")),
+                final=bool(data.get("final")),
                 keys=data.get("keys") or [],
                 explanation=data.get("explanation", ""),
             )
