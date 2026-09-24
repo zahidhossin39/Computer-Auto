@@ -38,6 +38,7 @@ except Exception:
     pass
 
 from src.config import load_config
+from src import apps
 from src.audio.recorder import AudioRecorder
 from src.trigger.hotkey import GlobalHotkeyListener
 from src.stt.engine import SpeechRecognizer
@@ -93,6 +94,7 @@ class ComputerAutoDaemon:
             model_dir=self.config.stt_model_dir, mock_mode=mock_stt
         )
         self.router = CommandRouter(intents=self.config.intents, use_jev=self.config.use_jev)
+        threading.Thread(target=apps.load, daemon=True).start()  # "open <app>" index, ~1s
         self.executor = WindowsExecutor()
         self.guardrail = SafetyGuardrail()
         self.capture = ScreenCapture()
@@ -367,6 +369,10 @@ class ComputerAutoDaemon:
                     else:
                         print(f"[ERROR]: Could not launch '{intent.action.target}'.")
                         self.ui_log(f"[ERROR]: Failed to launch '{intent.action.target}'")
+                elif intent.action.type in ("hotkey", "open_app", "type_text", "open_url"):
+                    ok = self.executor.run_action(intent.action)
+                    print(f"[EXECUTED]: {intent.action.type} {intent.action.keys or intent.action.command or intent.action.target} ({'ok' if ok else 'failed'})")
+                    self.ui_log(f"[EXECUTED]: {intent.name} ({'ok' if ok else 'failed'})")
 
                 self.update_ui("ready", f"Executed: {intent.name}", f"\"{utterance}\"")
 

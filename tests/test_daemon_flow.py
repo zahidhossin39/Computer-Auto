@@ -179,6 +179,6 @@ def test_vision_loop_stops_when_action_has_no_effect():
     daemon.vision = MagicMock()
     daemon.vision.plan_action.return_value = VisionAction(action="type", text="hi", explanation="type hi")
     daemon.vision.execute_action.return_value = True
-    daemon.handle_command("type hi everywhere")
+    daemon.handle_command("put hi everywhere")
     assert daemon.vision.plan_action.call_count == 2  # stops as soon as it repeats itself
     assert daemon.vision.execute_action.call_count == 1  # and never does it twice

@@ -96,3 +96,11 @@ def test_jev_routes_paraphrase_and_low_confidence_goes_to_vision(router):
         assert router.route("fire up the text editor").is_vision is True
     with patch("src.jev.choose", return_value=None):  # Jev down -> vision, never crash
         assert router.route("fire up the text editor").is_vision is True
+
+
+def test_argument_commands_skip_vision(router):
+    """type/go to/google are deterministic; no model call needed."""
+    assert router.route("type hello world").intent.action.target == "hello world"
+    assert router.route("go to youtube.com").intent.action.target == "https://youtube.com"
+    assert "q=best+pizza" in router.route("google best pizza").intent.action.target
+    assert router.route("open new tab").intent.action.keys == ["ctrl", "t"]

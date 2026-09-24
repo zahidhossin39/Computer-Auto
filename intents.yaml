@@ -257,3 +257,425 @@ intents:
     action:
       type: system_action
       command: key_page_up
+
+  # Keyboard shortcuts: Jev maps paraphrases and misheard words onto these
+  - name: new_tab
+    category: hotkey
+    triggers:
+      - "new tab"
+      - "open new tab"
+      - "open a new tab"
+    action:
+      type: hotkey
+      keys: ["ctrl", "t"]
+  - name: close_tab
+    category: hotkey
+    triggers:
+      - "close tab"
+      - "close this tab"
+      - "close the tab"
+    action:
+      type: hotkey
+      keys: ["ctrl", "w"]
+  - name: reopen_tab
+    category: hotkey
+    triggers:
+      - "reopen tab"
+      - "reopen closed tab"
+      - "restore tab"
+    action:
+      type: hotkey
+      keys: ["ctrl", "shift", "t"]
+  - name: next_tab
+    category: hotkey
+    triggers:
+      - "next tab"
+      - "switch tab"
+      - "tab right"
+    action:
+      type: hotkey
+      keys: ["ctrl", "tab"]
+  - name: previous_tab
+    category: hotkey
+    triggers:
+      - "previous tab"
+      - "last tab"
+      - "tab left"
+    action:
+      type: hotkey
+      keys: ["ctrl", "shift", "tab"]
+  - name: new_window
+    category: hotkey
+    triggers:
+      - "new window"
+      - "open new window"
+    action:
+      type: hotkey
+      keys: ["ctrl", "n"]
+  - name: incognito_window
+    category: hotkey
+    triggers:
+      - "incognito"
+      - "new incognito window"
+      - "private window"
+    action:
+      type: hotkey
+      keys: ["ctrl", "shift", "n"]
+  - name: refresh_page
+    category: hotkey
+    triggers:
+      - "refresh"
+      - "reload"
+      - "refresh page"
+      - "reload page"
+    action:
+      type: hotkey
+      keys: ["f5"]
+  - name: go_back
+    category: hotkey
+    triggers:
+      - "go back"
+      - "previous page"
+    action:
+      type: hotkey
+      keys: ["alt", "left"]
+  - name: go_forward
+    category: hotkey
+    triggers:
+      - "go forward"
+      - "next page"
+    action:
+      type: hotkey
+      keys: ["alt", "right"]
+  - name: address_bar
+    category: hotkey
+    triggers:
+      - "address bar"
+      - "focus address bar"
+      - "go to address bar"
+    action:
+      type: hotkey
+      keys: ["ctrl", "l"]
+  - name: bookmark_page
+    category: hotkey
+    triggers:
+      - "bookmark this"
+      - "bookmark page"
+    action:
+      type: hotkey
+      keys: ["ctrl", "d"]
+  - name: show_history
+    category: hotkey
+    triggers:
+      - "show history"
+      - "open history"
+      - "browser history"
+    action:
+      type: hotkey
+      keys: ["ctrl", "h"]
+  - name: show_downloads
+    category: hotkey
+    triggers:
+      - "show downloads"
+      - "open downloads"
+    action:
+      type: hotkey
+      keys: ["ctrl", "j"]
+  - name: zoom_in
+    category: hotkey
+    triggers:
+      - "zoom in"
+      - "make it bigger"
+      - "bigger text"
+    action:
+      type: hotkey
+      keys: ["ctrl", "="]
+  - name: zoom_out
+    category: hotkey
+    triggers:
+      - "zoom out"
+      - "make it smaller"
+      - "smaller text"
+    action:
+      type: hotkey
+      keys: ["ctrl", "-"]
+  - name: zoom_reset
+    category: hotkey
+    triggers:
+      - "reset zoom"
+      - "actual size"
+    action:
+      type: hotkey
+      keys: ["ctrl", "0"]
+  - name: fullscreen
+    category: hotkey
+    triggers:
+      - "full screen"
+      - "toggle full screen"
+      - "fullscreen"
+    action:
+      type: hotkey
+      keys: ["f11"]
+  - name: copy
+    category: hotkey
+    triggers:
+      - "copy"
+      - "copy that"
+      - "copy this"
+    action:
+      type: hotkey
+      keys: ["ctrl", "c"]
+  - name: cut
+    category: hotkey
+    triggers:
+      - "cut"
+      - "cut that"
+    action:
+      type: hotkey
+      keys: ["ctrl", "x"]
+  - name: paste
+    category: hotkey
+    triggers:
+      - "paste"
+      - "paste it"
+      - "paste that"
+    action:
+      type: hotkey
+      keys: ["ctrl", "v"]
+  - name: undo
+    category: hotkey
+    triggers:
+      - "undo"
+      - "undo that"
+    action:
+      type: hotkey
+      keys: ["ctrl", "z"]
+  - name: redo
+    category: hotkey
+    triggers:
+      - "redo"
+      - "redo that"
+    action:
+      type: hotkey
+      keys: ["ctrl", "y"]
+  - name: select_all
+    category: hotkey
+    triggers:
+      - "select all"
+      - "select everything"
+      - "select all text"
+    action:
+      type: hotkey
+      keys: ["ctrl", "a"]
+  - name: save
+    category: hotkey
+    triggers:
+      - "save"
+      - "save file"
+      - "save this"
+    action:
+      type: hotkey
+      keys: ["ctrl", "s"]
+  - name: find
+    category: hotkey
+    triggers:
+      - "find"
+      - "find on page"
+      - "search this page"
+    action:
+      type: hotkey
+      keys: ["ctrl", "f"]
+  - name: print
+    category: hotkey
+    triggers:
+      - "print"
+      - "print this"
+    action:
+      type: hotkey
+      keys: ["ctrl", "p"]
+  - name: bold
+    category: hotkey
+    triggers:
+      - "bold"
+      - "make it bold"
+    action:
+      type: hotkey
+      keys: ["ctrl", "b"]
+  - name: italic
+    category: hotkey
+    triggers:
+      - "italic"
+      - "make it italic"
+    action:
+      type: hotkey
+      keys: ["ctrl", "i"]
+  - name: underline
+    category: hotkey
+    triggers:
+      - "underline"
+    action:
+      type: hotkey
+      keys: ["ctrl", "u"]
+  - name: scroll_top
+    category: hotkey
+    triggers:
+      - "go to top"
+      - "scroll to top"
+      - "top of page"
+    action:
+      type: hotkey
+      keys: ["ctrl", "home"]
+  - name: scroll_bottom
+    category: hotkey
+    triggers:
+      - "go to bottom"
+      - "scroll to bottom"
+      - "bottom of page"
+    action:
+      type: hotkey
+      keys: ["ctrl", "end"]
+  - name: scroll_down
+    category: hotkey
+    triggers:
+      - "scroll down"
+    action:
+      type: hotkey
+      keys: ["pagedown"]
+  - name: scroll_up
+    category: hotkey
+    triggers:
+      - "scroll up"
+    action:
+      type: hotkey
+      keys: ["pageup"]
+  - name: switch_window
+    category: hotkey
+    triggers:
+      - "switch window"
+      - "switch app"
+      - "alt tab"
+      - "previous window"
+    action:
+      type: hotkey
+      keys: ["alt", "tab"]
+  - name: show_desktop
+    category: hotkey
+    triggers:
+      - "show desktop"
+      - "hide all windows"
+      - "minimize all"
+    action:
+      type: hotkey
+      keys: ["win", "d"]
+  - name: task_view
+    category: hotkey
+    triggers:
+      - "task view"
+      - "show all windows"
+    action:
+      type: hotkey
+      keys: ["win", "tab"]
+  - name: file_explorer
+    category: hotkey
+    triggers:
+      - "open file explorer"
+      - "open explorer"
+      - "open my files"
+    action:
+      type: hotkey
+      keys: ["win", "e"]
+  - name: windows_settings
+    category: hotkey
+    triggers:
+      - "open settings"
+      - "windows settings"
+    action:
+      type: hotkey
+      keys: ["win", "i"]
+  - name: start_menu
+    category: hotkey
+    triggers:
+      - "open start menu"
+      - "start menu"
+    action:
+      type: hotkey
+      keys: ["win"]
+  - name: windows_search
+    category: hotkey
+    triggers:
+      - "windows search"
+      - "open search"
+    action:
+      type: hotkey
+      keys: ["win", "s"]
+  - name: screenshot
+    category: hotkey
+    triggers:
+      - "take screenshot"
+      - "screenshot"
+      - "snip"
+    action:
+      type: hotkey
+      keys: ["win", "shift", "s"]
+  - name: clipboard_history
+    category: hotkey
+    triggers:
+      - "clipboard history"
+      - "show clipboard"
+    action:
+      type: hotkey
+      keys: ["win", "v"]
+  - name: emoji_panel
+    category: hotkey
+    triggers:
+      - "emoji"
+      - "open emoji"
+    action:
+      type: hotkey
+      keys: ["win", "."]
+  - name: task_manager
+    category: hotkey
+    triggers:
+      - "task manager"
+      - "open task manager"
+    action:
+      type: hotkey
+      keys: ["ctrl", "shift", "esc"]
+  - name: new_virtual_desktop
+    category: hotkey
+    triggers:
+      - "new desktop"
+      - "new virtual desktop"
+    action:
+      type: hotkey
+      keys: ["win", "ctrl", "d"]
+  - name: next_desktop
+    category: hotkey
+    triggers:
+      - "next desktop"
+    action:
+      type: hotkey
+      keys: ["win", "ctrl", "right"]
+  - name: previous_desktop
+    category: hotkey
+    triggers:
+      - "previous desktop"
+    action:
+      type: hotkey
+      keys: ["win", "ctrl", "left"]
+  - name: notifications
+    category: hotkey
+    triggers:
+      - "notifications"
+      - "show notifications"
+    action:
+      type: hotkey
+      keys: ["win", "n"]
+  - name: quick_settings
+    category: hotkey
+    triggers:
+      - "quick settings"
+      - "action center"
+    action:
+      type: hotkey
+      keys: ["win", "a"]

@@ -13,8 +13,9 @@ SETTINGS_PATH = Path(__file__).resolve().parent.parent / "settings.json"
 
 @dataclass
 class IntentAction:
-    type: str  # "system_action", "launch_app", "shell"
+    type: str  # "system_action", "launch_app", "hotkey", "open_app", "type_text", "open_url"
     command: Optional[str] = None
+    keys: List[str] = field(default_factory=list)  # for "hotkey": ["ctrl", "t"]
     target: Optional[str] = None
     fallback_target: Optional[str] = None
     args: List[str] = field(default_factory=list)
@@ -63,6 +64,7 @@ def load_intents(config_path: Optional[Path] = None) -> List[Intent]:
             target=action_data.get("target"),
             fallback_target=action_data.get("fallback_target"),
             args=action_data.get("args", []),
+            keys=action_data.get("keys", []),
         )
         intent = Intent(
             name=item["name"],

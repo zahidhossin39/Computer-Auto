@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from typing import Optional
 import pyautogui
 from src.config import IntentAction
@@ -224,6 +225,37 @@ class WindowsExecutor:
             return True
 
         return False
+
+    def _focus_target(self) -> None:
+        """Keys go to the focused window; if that is our own shell, hand focus back first."""
+        hwnd = self._get_active_window()
+        if hwnd and win32gui and hwnd != win32gui.GetForegroundWindow():
+            try:
+                win32gui.SetForegroundWindow(hwnd)
+                time.sleep(0.15)
+            except Exception:
+                pass
+
+    def run_action(self, action: IntentAction) -> bool:
+        """hotkey / open_app / type_text / open_url intents: no vision call needed."""
+        try:
+            if action.type == "hotkey" and action.keys:
+                self._focus_target()
+                pyautogui.hotkey(*action.keys)
+            elif action.type == "type_text" and action.target:
+                self._focus_target()
+                pyautogui.write(action.target, interval=0.01)
+            elif action.type == "open_app" and action.target:
+                explorer = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "explorer.exe")
+                return _shell_launch(explorer, f"shell:AppsFolder\\{action.target}")
+            elif action.type == "open_url" and action.target:
+                return _shell_launch(action.target)
+            else:
+                return False
+            return True
+        except Exception as e:
+            print(f"[EXECUTOR]: {action.type} failed ({e})")
+            return False
 
     def launch_app(self, action: IntentAction) -> bool:
         """Launch a desktop application or fallback executable."""
