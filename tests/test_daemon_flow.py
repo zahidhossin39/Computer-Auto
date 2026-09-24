@@ -195,3 +195,14 @@ def test_vision_loop_ends_after_final_action():
     daemon.vision.execute_action.return_value = True
     daemon.handle_command("put a tab somewhere")
     assert daemon.vision.plan_action.call_count == 1
+
+
+def test_compound_command_runs_each_known_part():
+    """"open notepad and type hi" is two known intents: no vision call."""
+    daemon = _make_daemon()
+    daemon.vision = MagicMock()
+    daemon.executor = MagicMock()
+    daemon.handle_command("open notepad and type hi")
+    daemon.executor.launch_app.assert_called_once()
+    assert daemon.executor.run_action.call_args[0][0].target == "hi"
+    daemon.vision.plan_action.assert_not_called()

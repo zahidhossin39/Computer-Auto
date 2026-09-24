@@ -294,6 +294,57 @@ class ComputerAutoDaemon:
         self.update_ui("ready", "Aborted (Panic Key)", "Action halted")
         self.ui_log("[PANIC]: Emergency stop triggered via Escape key.")
 
+    def _run_intent(self, intent, utterance: str, confirmed: bool) -> bool:
+        """Execute one deterministic intent. False means it now waits for a spoken "yes"."""
+        print(f"[TIER 1 ROUTER]: Matched intent '{intent.name}' ({intent.category})")
+        self.ui_log(f"[TIER 1 ROUTER]: Matched intent '{intent.name}' ({intent.category})")
+
+        # Check Guardrails
+        if not confirmed and self.guardrail.requires_confirmation(utterance, intent.is_destructive):
+            warning = self.guardrail.format_confirmation_prompt(utterance)
+            print(f"[GUARDRAIL]: {warning}")
+            self._pending_confirmation = utterance
+            self.update_ui("guardrail", "Confirmation Required", "Say 'yes' to confirm or 'no' to cancel")
+            self.ui_log(f"[GUARDRAIL]: {warning}")
+            self.tts.speak(warning)
+            return False
+
+        # Execute action
+        self.update_ui(
+            "executing",
+            f"Executing: {intent.name}",
+            f"Command: {intent.action.command or intent.action.target}",
+        )
+
+        if intent.action.type == "system_action" and intent.action.command:
+            self.executor.execute_system_action(intent.action.command)
+            print(f"[EXECUTED]: Action '{intent.action.command}' dispatched.")
+            self.ui_log(f"[EXECUTED]: Dispatched '{intent.action.command}'")
+        elif intent.action.type == "launch_app":
+            success = self.executor.launch_app(intent.action)
+            if success:
+                print(f"[EXECUTED]: Launched '{intent.action.target}'.")
+                self.ui_log(f"[EXECUTED]: Launched '{intent.action.target}'")
+            else:
+                print(f"[ERROR]: Could not launch '{intent.action.target}'.")
+                self.ui_log(f"[ERROR]: Failed to launch '{intent.action.target}'")
+        elif intent.action.type in ("hotkey", "open_app", "type_text", "open_url"):
+            ok = self.executor.run_action(intent.action)
+            print(f"[EXECUTED]: {intent.action.type} {intent.action.keys or intent.action.command or intent.action.target} ({'ok' if ok else 'failed'})")
+            self.ui_log(f"[EXECUTED]: {intent.name} ({'ok' if ok else 'failed'})")
+
+        self.update_ui("ready", f"Executed: {intent.name}", f"\"{utterance}\"")
+        return True
+
+    def _split_compound(self, utterance: str) -> list:
+        """"open notepad and type hello" -> two intents, but only if EVERY part is a known
+        intent; anything else goes to the vision agent whole."""
+        parts = [p for p in re.split(r"\s*,?\s*\b(?:and then|then|and)\b\s*", utterance, flags=re.I) if p.strip()]
+        if len(parts) < 2:
+            return []
+        routes = [self.router.route(p) for p in parts]
+        return routes if all(not r.is_vision and r.intent for r in routes) else []
+
     def handle_command(self, utterance: str, confirmed: bool = False) -> None:
         """Process transcribed speech or typed command.
 
@@ -336,47 +387,15 @@ class ComputerAutoDaemon:
 
             route = self.router.route(utterance)
 
-            # 1. Tier 1: Deterministic System Intent
-            if not route.is_vision and route.intent is not None:
-                intent = route.intent
-                print(f"[TIER 1 ROUTER]: Matched intent '{intent.name}' ({intent.category})")
-                self.ui_log(f"[TIER 1 ROUTER]: Matched intent '{intent.name}' ({intent.category})")
-
-                # Check Guardrails
-                if not confirmed and self.guardrail.requires_confirmation(utterance, intent.is_destructive):
-                    warning = self.guardrail.format_confirmation_prompt(utterance)
-                    print(f"[GUARDRAIL]: {warning}")
-                    self._pending_confirmation = utterance
-                    self.update_ui("guardrail", "Confirmation Required", "Say 'yes' to confirm or 'no' to cancel")
-                    self.ui_log(f"[GUARDRAIL]: {warning}")
-                    self.tts.speak(warning)
-                    return
-
-                # Execute action
-                self.update_ui(
-                    "executing",
-                    f"Executing: {intent.name}",
-                    f"Command: {intent.action.command or intent.action.target}",
-                )
-
-                if intent.action.type == "system_action" and intent.action.command:
-                    self.executor.execute_system_action(intent.action.command)
-                    print(f"[EXECUTED]: Action '{intent.action.command}' dispatched.")
-                    self.ui_log(f"[EXECUTED]: Dispatched '{intent.action.command}'")
-                elif intent.action.type == "launch_app":
-                    success = self.executor.launch_app(intent.action)
-                    if success:
-                        print(f"[EXECUTED]: Launched '{intent.action.target}'.")
-                        self.ui_log(f"[EXECUTED]: Launched '{intent.action.target}'")
-                    else:
-                        print(f"[ERROR]: Could not launch '{intent.action.target}'.")
-                        self.ui_log(f"[ERROR]: Failed to launch '{intent.action.target}'")
-                elif intent.action.type in ("hotkey", "open_app", "type_text", "open_url"):
-                    ok = self.executor.run_action(intent.action)
-                    print(f"[EXECUTED]: {intent.action.type} {intent.action.keys or intent.action.command or intent.action.target} ({'ok' if ok else 'failed'})")
-                    self.ui_log(f"[EXECUTED]: {intent.name} ({'ok' if ok else 'failed'})")
-
-                self.update_ui("ready", f"Executed: {intent.name}", f"\"{utterance}\"")
+            # 1. Tier 1: deterministic intents - one, or a chain like "open notepad and type hi"
+            steps = [route] if not route.is_vision else self._split_compound(utterance)
+            if steps:
+                for i, r in enumerate(steps):
+                    if i:  # give a just-launched app time to open and take focus
+                        prev = steps[i - 1].intent.action.type
+                        time.sleep(2.0 if prev in ("launch_app", "open_app", "open_url") else 0.3)
+                    if not self._run_intent(r.intent, r.command, confirmed):
+                        return
 
             # 2. Tier 2: Unscripted Visual Navigation via vision model
             else:
