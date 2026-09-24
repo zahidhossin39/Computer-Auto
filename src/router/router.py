@@ -68,6 +68,8 @@ class CommandRouter:
         # trigger, at most MAX_EXTRA_WORDS words may remain.
         sorted_triggers = sorted(self._trigger_map.keys(), key=len, reverse=True)
         for trigger in sorted_triggers:
+            if " " not in trigger:
+                continue  # one word ("print", "cut") only counts alone: "print my name" is not ctrl+p
             # Check whole phrase match or word boundary
             pattern = r"\b" + re.escape(trigger) + r"\b"
             if re.search(pattern, clean_text):

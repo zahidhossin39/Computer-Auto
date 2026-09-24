@@ -104,3 +104,10 @@ def test_argument_commands_skip_vision(router):
     assert router.route("go to youtube.com").intent.action.target == "https://youtube.com"
     assert "q=best+pizza" in router.route("google best pizza").intent.action.target
     assert router.route("open new tab").intent.action.keys == ["ctrl", "t"]
+
+
+def test_one_word_triggers_do_not_fire_inside_sentences(router):
+    """"print my name" must not press ctrl+p; "print" alone still does."""
+    assert router.route("print").intent.name == "print"
+    assert router.route("print my name").is_vision
+    assert router.route("cut the grass").is_vision
