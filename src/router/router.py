@@ -113,20 +113,33 @@ class CommandRouter:
         """Deterministic argument commands; None lets Jev and vision handle the rest."""
         m = re.match(r"(?:type|dictate)\s+(.+)", raw, re.I)
         if m:
-            return _make("type_text", IntentAction("type_text", target=m.group(1).strip()))
-        m = re.match(r"(?:go to|open|visit)\s+((?:https?://)?[\w-]+(?:\.[\w-]+)+\S*)$", raw.rstrip(". "), re.I)
-        if m:
+            return _make("type_text", IntentAction("type_text", target=_dictation(m.group(1).strip())))
+        # A dotted word is a site ("youtube.com"), unless it is a file ("notepad.exe")
+        m = re.match(r"(?:go to|open|visit)\s+((?:https?://)?[\w-]+(?:\.[\w-]+)*\.([a-z]{2,12})(?:/\S*)?)$",
+                     raw.rstrip(". "), re.I)
+        if m and m.group(2).lower() not in FILE_EXTENSIONS:
             url = m.group(1) if "://" in m.group(1) else "https://" + m.group(1)
             return _make("open_url", IntentAction("open_url", target=url))
-        m = re.match(r"(?:google|search google for|search the web for|look up)\s+(.+)", clean)
+        m = re.match(r"(?:google|search google for|search web for|look up)\s+(.+)", clean)
         if m:
             url = "https://www.google.com/search?q=" + quote_plus(m.group(1))
             return _make("web_search", IntentAction("open_url", target=url))
+        m = re.match(r"search (\w+) for (.+)", clean)
+        if m and m.group(1) in SITE_SEARCH:
+            url = SITE_SEARCH[m.group(1)] + quote_plus(m.group(2))
+            return _make("site_search", IntentAction("open_url", target=url))
+        m = re.match(r"(?:press|hit)\s+(.+)$", clean)
+        if m:
+            keys = _parse_keys(m.group(1))
+            if keys:
+                return _make("press_keys", IntentAction("hotkey", keys=keys))
         m = re.match(r"(?:switch to|go to|focus|show me|bring up)\s+(.+)$", clean)
         if m:
             win = apps.find_window(m.group(1))
             if win:
                 return _make("focus_window", IntentAction("focus_window", target=str(win[0]), command=win[1]))
+            if m.group(1) in SITES:  # "go to youtube": no such window open, so open the site
+                return _make("open_url", IntentAction("open_url", target=SITES[m.group(1)]))
         m = re.match(r"(?:close|quit|exit)\s+(.+)$", clean)
         if m and m.group(1) not in ("tab", "this tab", "window", "this", "it"):
             win = apps.find_window(m.group(1))
@@ -146,3 +159,54 @@ class CommandRouter:
 
 def _make(name: str, action: IntentAction) -> Intent:
     return Intent(name=name, category="slot", triggers=[], action=action)
+
+
+KEY_ALIASES = {"control": "ctrl", "windows": "win", "window": "win", "escape": "esc",
+               "return": "enter", "plus": "+", "minus": "-", "equals": "=", "period": ".",
+               "comma": ",", "slash": "/", "spacebar": "space", "arrow": "", "key": "", "and": "",
+               "then": "", "delete": "delete", "del": "delete"}
+MERGE = {("page", "down"): "pagedown", ("page", "up"): "pageup", ("print", "screen"): "printscreen",
+         ("caps", "lock"): "capslock"}
+
+
+def _parse_keys(spoken: str) -> Optional[List[str]]:
+    """ "control shift t" -> ["ctrl", "shift", "t"]; None if any word is not a key."""
+    import pyautogui
+    words = [KEY_ALIASES.get(w, w) for w in spoken.replace("+", " ").split()]
+    words = [w for w in words if w]
+    keys, i = [], 0
+    while i < len(words):
+        pair = tuple(words[i:i + 2])
+        if pair in MERGE:
+            keys.append(MERGE[pair])
+            i += 2
+            continue
+        keys.append(words[i])
+        i += 1
+    return keys if keys and all(k in pyautogui.KEYBOARD_KEYS for k in keys) else None
+
+
+FILE_EXTENSIONS = {"exe", "txt", "docx", "doc", "pdf", "py", "png", "jpg", "jpeg", "xlsx", "csv",
+                   "pptx", "zip", "mp3", "mp4", "lnk", "bat", "md", "json"}
+SITES = {"youtube": "https://www.youtube.com", "gmail": "https://mail.google.com",
+         "google": "https://www.google.com", "github": "https://github.com",
+         "reddit": "https://www.reddit.com", "amazon": "https://www.amazon.com",
+         "netflix": "https://www.netflix.com", "facebook": "https://www.facebook.com",
+         "linkedin": "https://www.linkedin.com", "twitter": "https://x.com", "x": "https://x.com",
+         "wikipedia": "https://en.wikipedia.org", "chatgpt": "https://chatgpt.com",
+         "maps": "https://maps.google.com", "google maps": "https://maps.google.com"}
+SITE_SEARCH = {"youtube": "https://www.youtube.com/results?search_query=",
+               "amazon": "https://www.amazon.com/s?k=", "github": "https://github.com/search?q=",
+               "reddit": "https://www.reddit.com/search/?q=", "wikipedia": "https://en.wikipedia.org/w/index.php?search=",
+               "maps": "https://www.google.com/maps/search/", "google": "https://www.google.com/search?q="}
+# Spoken dictation words -> what they mean when typed
+DICTATION = [(r"\s*\bnew paragraph\b\s*", "\n\n"), (r"\s*\bnew line\b\s*", "\n"),
+             (r"\s*\bcomma\b", ","), (r"\s*\bfull stop\b", "."), (r"\s*\bperiod\b", "."),
+             (r"\s*\bquestion mark\b", "?"), (r"\s*\bexclamation (?:mark|point)\b", "!")]
+
+
+def _dictation(text: str) -> str:
+    """ "hello comma world new line bye" -> "hello, world\nbye" """
+    for pattern, repl in DICTATION:
+        text = re.sub(pattern, repl, text, flags=re.I)
+    return text

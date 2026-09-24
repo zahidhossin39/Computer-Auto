@@ -287,6 +287,8 @@ class WindowsExecutor:
             elif action.type == "close_window" and action.target:
                 win32gui.PostMessage(int(action.target), win32con.WM_CLOSE, 0, 0)
             elif action.type == "open_url" and action.target:
+                if not action.target.lower().startswith(("http://", "https://")):
+                    return False  # ShellExecute would run a local path or program
                 return _shell_launch(action.target)
             else:
                 return False

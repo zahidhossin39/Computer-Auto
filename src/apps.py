@@ -5,6 +5,7 @@ that `shell:AppsFolder\\<AppID>` opens, so one source covers both kinds.
 """
 
 import difflib
+import re
 import json
 import subprocess
 import threading
@@ -102,7 +103,7 @@ def find_window(spoken: str):
         return None
     wins = open_windows()
     for hwnd, title, exe in wins:  # front-most first, so "chrome" means the Chrome you last used
-        hay = f"{title.lower()} {exe[:-4]}"
+        hay = set(re.findall(r"\w+", f"{title.lower()} {exe[:-4]}"))  # whole words: "mail" != "gmail"
         if all(w in hay for w in words):
             return hwnd, title
     # "note pad", "vs code": resolve through the app index, then match its name

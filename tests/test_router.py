@@ -122,3 +122,23 @@ def test_close_an_app_that_is_not_open_does_not_close_the_front_window(router, m
     monkeypatch.setattr(apps, "find_window", lambda name: (123, "Spotify Premium"))
     res = router.route("switch to spotify")
     assert res.intent.action.type == "focus_window" and res.intent.action.target == "123"
+
+
+def test_press_any_key_combination(router):
+    assert router.route("press control shift t").intent.action.keys == ["ctrl", "shift", "t"]
+    assert router.route("press f5").intent.action.keys == ["f5"]
+    assert router.route("press shift tab").intent.action.keys == ["shift", "tab"]
+    assert router.route("press the red button").is_vision  # not keys: let vision find it
+
+
+def test_sites_files_and_dictation(router, monkeypatch):
+    from src import apps
+    monkeypatch.setattr(apps, "find_window", lambda name: None)
+    monkeypatch.setattr(apps, "find", lambda name: None)
+    exe = router.route("open notepad.exe")
+    assert exe.intent is None or exe.intent.action.type != "open_url"  # a file, not a website
+    assert router.route("go to youtube").intent.action.target == "https://www.youtube.com"
+    assert "search_query=lofi+music" in router.route("search youtube for lofi music").intent.action.target
+    assert "q=cats" in router.route("search the web for cats").intent.action.target
+    assert router.route("type hello comma world new line bye").intent.action.target == "hello, world
+bye"
