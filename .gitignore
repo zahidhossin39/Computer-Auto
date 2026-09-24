@@ -51,3 +51,4 @@ logs/
 
 # User settings (contains API key)
 settings.json
+@AutomationLog.txt
