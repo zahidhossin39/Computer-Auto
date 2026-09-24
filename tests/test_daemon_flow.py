@@ -206,3 +206,18 @@ def test_compound_command_runs_each_known_part():
     daemon.executor.launch_app.assert_called_once()
     assert daemon.executor.run_action.call_args[0][0].target == "hi"
     daemon.vision.plan_action.assert_not_called()
+
+
+def test_mixed_chain_runs_known_part_then_vision(monkeypatch):
+    """"open notepad and click the third menu item": launch instantly, vision gets only the rest."""
+    from src.vision.agent import VisionAction
+    monkeypatch.setattr("main.time.sleep", lambda s: None)
+    daemon = _make_daemon()
+    daemon.executor = MagicMock()
+    daemon.capture = MagicMock()
+    daemon.capture.grab_screen.return_value = (MagicMock(), 100, 100)
+    daemon.vision = MagicMock()
+    daemon.vision.plan_action.return_value = VisionAction(action="done", explanation="ok")
+    daemon.handle_command("open notepad and click the third menu item")
+    daemon.executor.launch_app.assert_called_once()
+    assert daemon.vision.plan_action.call_args[0][0] == "click the third menu item"

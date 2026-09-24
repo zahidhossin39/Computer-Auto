@@ -344,14 +344,23 @@ class ComputerAutoDaemon:
         self.update_ui("ready", f"Executed: {intent.name}", f"\"{utterance}\"")
         return True
 
-    def _split_compound(self, utterance: str) -> list:
-        """"open notepad and type hello" -> two intents, but only if EVERY part is a known
-        intent; anything else goes to the vision agent whole."""
+    def _settle(self, step) -> None:
+        """Give a just-launched app time to open and take focus before the next step."""
+        time.sleep(2.0 if step.intent.action.type in ("launch_app", "open_app", "open_url") else 0.3)
+
+    def _split_compound(self, utterance: str) -> tuple:
+        """"open chrome and search for cats" -> ([open chrome], "search for cats"): the known
+        leading parts run instantly, only the rest goes to the vision agent."""
         parts = [p for p in re.split(r"\s*,?\s*\b(?:and then|then|and)\b\s*", utterance, flags=re.I) if p.strip()]
         if len(parts) < 2:
-            return []
-        routes = [self.router.route(p) for p in parts]
-        return routes if all(not r.is_vision and r.intent for r in routes) else []
+            return [], utterance
+        known = []
+        for i, p in enumerate(parts):
+            r = self.router.route(p)
+            if r.is_vision or not r.intent:
+                return known, " and ".join(parts[i:]) if known else utterance
+            known.append(r)
+        return known, ""
 
     def handle_command(self, utterance: str, confirmed: bool = False) -> None:
         """Process transcribed speech or typed command.
@@ -396,17 +405,19 @@ class ComputerAutoDaemon:
             route = self.router.route(utterance)
 
             # 1. Tier 1: deterministic intents - one, or a chain like "open notepad and type hi"
-            steps = [route] if not route.is_vision else self._split_compound(utterance)
-            if steps:
-                for i, r in enumerate(steps):
-                    if i:  # give a just-launched app time to open and take focus
-                        prev = steps[i - 1].intent.action.type
-                        time.sleep(2.0 if prev in ("launch_app", "open_app", "open_url") else 0.3)
-                    if not self._run_intent(r.intent, r.command, confirmed):
-                        return
+            steps, rest = ([route], "") if not route.is_vision else self._split_compound(utterance)
+            for i, r in enumerate(steps):
+                if i:
+                    self._settle(steps[i - 1])
+                if not self._run_intent(r.intent, r.command, confirmed):
+                    return
+            if steps and rest:
+                self._settle(steps[-1])
+                utterance = rest
+                print(f"[TIER 2 VISION]: rest of the command: \"{rest}\"")
 
             # 2. Tier 2: Unscripted Visual Navigation via vision model
-            else:
+            if rest:
                 print("[TIER 2 VISION]: Unscripted command -> routing to vision model...")
                 self.update_ui("executing", "Vision Agent Planning...", "Analyzing screen with vision model...")
                 self.ui_log("[TIER 2 VISION]: Routing to vision model...")
