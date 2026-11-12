@@ -1,0 +1,54 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+  }
+}
+
+/* Custom subtle scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.25);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.45);
+}
+
+/* Glassmorphism surface helpers */
+.glass-panel {
+  @apply bg-white/75 dark:bg-slate-900/65 backdrop-blur-xl border border-slate-200/80 dark:border-slate-800/80;
+}
+
+.glass-card {
+  @apply bg-white/80 dark:bg-slate-900/50 backdrop-blur-md border border-slate-200/70 dark:border-slate-800/70;
+}
+
+/* Tauri drag region */
+[data-tauri-drag-region] {
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+[data-tauri-drag-region] button,
+[data-tauri-drag-region] input,
+[data-tauri-drag-region] a {
+  -webkit-app-region: no-drag;
+}

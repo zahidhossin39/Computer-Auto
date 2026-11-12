@@ -104,9 +104,10 @@ class SpeechRecognizer:
     def _transcribe_cloud(self, samples: np.ndarray, sample_rate: int = 16000) -> str:
         """OpenRouter's transcription endpoint; "" on any failure so Parakeet takes over."""
         import requests
-        key = os.environ.get("OPENROUTER_API_KEY")
+        key = os.environ.get("OPENROUTER_API_KEY", "").strip()
         if not key:
             return ""
+        model = (self.cloud_model or "google/gemini-2.5-flash").strip()
         try:
             buf = io.BytesIO()
             with wave.open(buf, "wb") as wf:
@@ -114,13 +115,22 @@ class SpeechRecognizer:
                 wf.setsampwidth(2)
                 wf.setframerate(sample_rate)
                 wf.writeframes((np.clip(samples, -1.0, 1.0) * 32767).astype(np.int16).tobytes())
-            r = requests.post(TRANSCRIBE_URL, headers={"Authorization": f"Bearer {key}"},
-                              data={"model": self.cloud_model, "prompt": VOCAB_HINT},
-                              files={"file": ("command.wav", buf.getvalue(), "audio/wav")}, timeout=15)
+            r = requests.post(
+                TRANSCRIBE_URL,
+                headers={"Authorization": f"Bearer {key}"},
+                data={"model": model, "prompt": VOCAB_HINT},
+                files={"file": ("command.wav", buf.getvalue(), "audio/wav")},
+                timeout=15,
+            )
             r.raise_for_status()
-            return r.json().get("text", "").strip().rstrip(".?!,:;\"'").strip().lower()
+            text = str(r.json().get("text", "")).strip().strip("\"'").rstrip(".?!,:;\"'").strip().lower()
+            if text:
+                print(f'[STT CLOUD]: "{text}" ({model})')
+            else:
+                print(f"[STT CLOUD]: no words recognised ({model})")
+            return text
         except Exception as e:
-            print(f"[STT]: cloud transcription failed ({e}), using the local model")
+            print(f"[STT CLOUD]: cloud transcription failed ({e})")
             return ""
 
     def transcribe(self, samples: np.ndarray, sample_rate: int = 16000) -> str:
@@ -128,7 +138,8 @@ class SpeechRecognizer:
         if samples is None or len(samples) == 0:
             return ""
 
-        if not self.is_ready:
+        has_api_key = bool(os.environ.get("OPENROUTER_API_KEY", "").strip())
+        if not self.is_ready and not has_api_key:
             print("[STT]: offline model not downloaded (and no cloud STT configured)")
             return ""
 
@@ -141,7 +152,7 @@ class SpeechRecognizer:
 
         # Matches the recorder's silence threshold (peak 0.008): soft spoken commands
         # that triggered VAD must reach the model instead of being silently dropped.
-        if duration < 0.4 or peak < 0.008:
+        if duration < 0.35 or peak < 0.008:
             print(f"[STT]: ignored {duration:.2f}s of audio (peak {peak:.3f}) - too short or too quiet")
             return ""
 
@@ -161,6 +172,8 @@ class SpeechRecognizer:
                 text = stream.result.text.strip().rstrip(".?!,:;\"'").strip().lower()
             except Exception:
                 text = ""
+        if not text and not self.cloud_model and duration >= 0.35 and peak >= 0.012 and has_api_key:
+            text = self._transcribe_cloud(samples, sample_rate)
         if text:
             print(f'[STT]: "{text}" ({duration:.2f}s, peak {peak:.3f})')
         else:

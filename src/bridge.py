@@ -1,0 +1,362 @@
+"""Headless JSON-Lines stdio bridge for the Rust Tauri desktop UI.
+
+Run with:
+    python -u -m src.bridge
+    python -u src/bridge.py
+"""
+
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+import sys
+import threading
+from typing import Any, Dict, List, Optional, TextIO
+
+# Support both `python -m src.bridge` and `python src/bridge.py`
+if __package__ is None or __package__ == "":
+    _REPO_ROOT = str(Path(__file__).resolve().parent.parent)
+    if _REPO_ROOT not in sys.path:
+        sys.path.insert(0, _REPO_ROOT)
+
+from src.config import DEFAULT_VISION_MODEL, _upgrade_model_id, save_merged_settings
+
+try:
+    from src.updater import APP_VERSION
+except Exception:
+    APP_VERSION = "1.0.0"
+
+
+def _mask_key(key: str) -> str:
+    """Return a masked representation of an API key for UI display."""
+    k = key.strip()
+    if not k:
+        return ""
+    if len(k) <= 12:
+        return "*" * len(k)
+    return f"{k[:8]}...{k[-4:]}"
+
+
+def _classify_log_kind(line: str) -> str:
+    """Classify a daemon log line into UI log categories."""
+    upper = line.upper()
+    if "[GUARDRAIL]" in upper or "[PANIC]" in upper:
+        return "guardrail"
+    if "[ERROR]" in upper or "[AUDIO WARNING]" in upper or "VISION ERROR" in upper or "FAILED" in upper:
+        return "error"
+    if "[TIER 2 VISION]" in upper or "[AGENT STEP" in upper:
+        return "vision"
+    if "[EXECUTED]" in upper or "[TIER 1 ROUTER]" in upper or "[COMMAND]" in upper or "[ANSWER]" in upper:
+        return "action"
+    return "info"
+
+
+class _BridgeUIAdapter:
+    """Lightweight headless UI adapter attached to ComputerAutoDaemon.ui."""
+
+    def __init__(self, bridge: "StdioBridge"):
+        self._bridge = bridge
+
+    def update_state(self, state: str, message: str, detail: str = "") -> None:
+        self._bridge.emit_state(state, message, detail)
+
+    def log(self, message: str) -> None:
+        self._bridge.emit_log(message)
+
+    def set_transcript(self, text: str) -> None:
+        self._bridge.emit_log(f'[STT]: "{text}"', kind="info")
+
+    def set_ghost(self, ghost: bool) -> None:
+        pass
+
+
+class StdioBridge:
+    """JSON-Lines stdio bridge wrapping ComputerAutoDaemon without Tkinter."""
+
+    def __init__(
+        self,
+        daemon: Optional[Any] = None,
+        out_stream: Optional[TextIO] = None,
+    ):
+        self._out: TextIO = out_stream or sys.stdout
+        self._write_lock = threading.Lock()
+        self._download_thread: Optional[threading.Thread] = None
+
+        if daemon is None:
+            from main import ComputerAutoDaemon
+            daemon = ComputerAutoDaemon(ui_mode="none")
+
+        self.daemon = daemon
+        self.daemon.ui = _BridgeUIAdapter(self)
+        if hasattr(self.daemon, "recorder") and hasattr(self.daemon.recorder, "on_level"):
+            self.daemon.recorder.on_level = self.emit_audio_level
+
+        has_key = bool(os.environ.get("OPENROUTER_API_KEY", "").strip())
+        if not getattr(self.daemon.recognizer, "is_ready", True) and not has_key:
+            self._current_state = (
+                "ready",
+                "Offline voice model missing — open Settings to download",
+                "Typed commands still work",
+            )
+        else:
+            self._current_state = ("ready", "Ready", "Double-tap Left Ctrl or type a command")
+
+    def emit(self, payload: Dict[str, Any]) -> None:
+        """Write one JSON-Lines event to stdout, thread-safely."""
+        line = json.dumps(payload, ensure_ascii=False)
+        with self._write_lock:
+            self._out.write(line + "\n")
+            self._out.flush()
+
+    def emit_state(self, state: str, text: str, detail: str = "") -> None:
+        self._current_state = (state, text, detail)
+        self.emit({"event": "state", "state": state, "text": text, "detail": detail})
+
+    def emit_audio_level(self, level: float) -> None:
+        try:
+            clamped = max(0.0, min(1.0, float(level)))
+        except (TypeError, ValueError):
+            clamped = 0.0
+        self.emit({"event": "audio_level", "level": clamped})
+
+    def emit_log(self, line: str, kind: Optional[str] = None) -> None:
+        resolved_kind = kind or _classify_log_kind(line)
+        self.emit({"event": "log", "line": str(line), "kind": resolved_kind})
+
+    def build_settings_payload(self) -> Dict[str, Any]:
+        """Build the current settings snapshot for the UI."""
+        cfg = self.daemon.config
+        api_key = str(os.environ.get("OPENROUTER_API_KEY") or "").strip()
+        return {
+            "vision_model": getattr(cfg, "vision_model", DEFAULT_VISION_MODEL),
+            "vision_api_base": getattr(cfg, "vision_api_base", "https://openrouter.ai/api/v1"),
+            "stt_cloud_model": getattr(cfg, "stt_cloud_model", ""),
+            "theme": getattr(cfg, "theme", "dark"),
+            "max_vision_steps": int(getattr(cfg, "max_vision_steps", 8)),
+            "use_jev": bool(getattr(cfg, "use_jev", True)),
+            "has_api_key": bool(api_key),
+            "masked_key": _mask_key(api_key),
+            "has_local_model": bool(getattr(self.daemon.recognizer, "has_local_model", False)),
+            "app_version": APP_VERSION,
+        }
+
+    def emit_settings(self) -> None:
+        self.emit({"event": "settings", "data": self.build_settings_payload()})
+
+    def build_intents_payload(self) -> List[Dict[str, Any]]:
+        """Serialize loaded intents for the Commands view."""
+        items: List[Dict[str, Any]] = []
+        for intent in getattr(self.daemon.config, "intents", []):
+            action = getattr(intent, "action", None)
+            desc = (
+                getattr(action, "command", None)
+                or getattr(action, "target", None)
+                or intent.name.replace("_", " ").title()
+            )
+            items.append({
+                "name": intent.name,
+                "description": str(desc),
+                "phrases": list(getattr(intent, "triggers", [])),
+                "category": getattr(intent, "category", "general"),
+                "destructive": bool(getattr(intent, "is_destructive", False)),
+            })
+        return items
+
+    def emit_intents(self) -> None:
+        self.emit({"event": "intents", "data": self.build_intents_payload()})
+
+    def emit_download_progress(self, done: int, total: int, stage: str) -> None:
+        self.emit({
+            "event": "download_progress",
+            "done": int(done),
+            "total": int(total),
+            "stage": str(stage),
+        })
+
+    def _apply_settings(self, raw: Dict[str, Any]) -> None:
+        """Persist settings and hot-reload daemon components without restart."""
+        to_save: Dict[str, Any] = {}
+        cfg = self.daemon.config
+
+        if "openrouter_api_key" in raw:
+            key = str(raw.get("openrouter_api_key") or "").strip()
+            if key:
+                to_save["openrouter_api_key"] = key
+                os.environ["OPENROUTER_API_KEY"] = key
+
+        if raw.get("vision_model"):
+            model = _upgrade_model_id(raw["vision_model"]) or DEFAULT_VISION_MODEL
+            to_save["vision_model"] = model
+            cfg.vision_model = model
+
+        if "stt_cloud_model" in raw and raw["stt_cloud_model"] is not None:
+            stt_model = _upgrade_model_id(raw["stt_cloud_model"])
+            to_save["stt_cloud_model"] = stt_model
+            cfg.stt_cloud_model = stt_model
+
+        if raw.get("vision_api_base"):
+            base = str(raw["vision_api_base"]).strip()
+            to_save["vision_api_base"] = base
+            cfg.vision_api_base = base
+
+        if "vision_api_key" in raw and raw["vision_api_key"] is not None:
+            vkey = str(raw["vision_api_key"]).strip()
+            to_save["vision_api_key"] = vkey
+            cfg.vision_api_key = vkey
+
+        if raw.get("theme"):
+            theme = str(raw["theme"]).strip()
+            to_save["theme"] = theme
+            cfg.theme = theme
+
+        if "use_jev" in raw:
+            use_jev = bool(raw["use_jev"])
+            to_save["use_jev"] = use_jev
+            cfg.use_jev = use_jev
+
+        if "max_vision_steps" in raw and raw["max_vision_steps"] is not None:
+            try:
+                steps = int(raw["max_vision_steps"])
+                if steps > 0:
+                    to_save["max_vision_steps"] = steps
+                    cfg.max_vision_steps = steps
+            except (TypeError, ValueError):
+                pass
+
+        save_merged_settings(to_save)
+
+        if hasattr(self.daemon, "router") and self.daemon.router is not None:
+            self.daemon.router.use_jev = cfg.use_jev
+
+        if hasattr(self.daemon, "recognizer") and self.daemon.recognizer is not None:
+            self.daemon.recognizer.cloud_model = cfg.stt_cloud_model
+
+        if hasattr(self.daemon, "vision") and self.daemon.vision is not None:
+            self.daemon.vision.model_name = cfg.vision_model
+            self.daemon.vision.api_base = cfg.vision_api_base.rstrip("/")
+            effective_key = cfg.vision_api_key or os.environ.get("OPENROUTER_API_KEY", "").strip()
+            if effective_key:
+                self.daemon.vision.api_key = effective_key
+                self.daemon.vision.mock_mode = False
+
+        self.emit_settings()
+        self.emit_state(*self._current_state)
+
+    def _start_download_model(self) -> None:
+        """Start offline Parakeet model download on a background thread."""
+        if self._download_thread is not None and self._download_thread.is_alive():
+            self.emit_log("[STT]: Offline model download already in progress.", kind="info")
+            return
+
+        def _worker() -> None:
+            self.daemon.download_offline_model(progress_cb=self.emit_download_progress)
+            self.emit_settings()
+
+        self._download_thread = threading.Thread(target=_worker, daemon=True)
+        self._download_thread.start()
+
+    def handle_message(self, msg: Dict[str, Any]) -> None:
+        """Dispatch one parsed JSON command from stdin."""
+        cmd = str(msg.get("cmd") or "").strip()
+        if not cmd:
+            return
+
+        if cmd == "get_state":
+            self.emit_state(*self._current_state)
+            self.emit_settings()
+            self.emit_intents()
+        elif cmd == "run_command":
+            text = str(msg.get("text") or "").strip()
+            if text:
+                self.daemon.on_manual_command(text)
+        elif cmd == "toggle_mic":
+            self.daemon.toggle_session()
+        elif cmd == "start_mic":
+            if not getattr(self.daemon, "_listening_active", False):
+                self.daemon.continuous = True
+                self.daemon.hotkey_listener.detector.is_listening = True
+                self.daemon.on_listening_toggle(True)
+        elif cmd == "stop_mic":
+            if getattr(self.daemon, "_listening_active", False) or getattr(self.daemon, "continuous", False):
+                self.daemon.continuous = False
+                self.daemon.hotkey_listener.detector.is_listening = False
+                self.daemon.on_listening_toggle(False)
+        elif cmd == "set_continuous":
+            enabled = bool(msg.get("enabled", False))
+            self.daemon.continuous = enabled
+            self.daemon.hotkey_listener.detector.is_listening = enabled
+        elif cmd == "panic":
+            self.daemon.on_panic_key()
+        elif cmd == "confirm_guardrail":
+            approved = bool(msg.get("approved", False))
+            self.daemon.confirm_pending(approved, asynchronous=True)
+        elif cmd == "save_settings":
+            settings_data = msg.get("settings")
+            if isinstance(settings_data, dict):
+                self._apply_settings(settings_data)
+        elif cmd == "download_model":
+            self._start_download_model()
+        elif cmd == "cancel_download":
+            self.daemon.cancel_model_download()
+        else:
+            self.emit_log(f"[BRIDGE]: Unknown command '{cmd}'", kind="error")
+
+    def serve_forever(self, in_stream: Optional[TextIO] = None, start_hotkeys: bool = True) -> None:
+        """Read JSON-Lines commands from stdin until EOF."""
+        stream = in_stream or sys.stdin
+        if start_hotkeys:
+            try:
+                self.daemon.hotkey_listener.start()
+            except Exception as e:
+                self.emit_log(f"[BRIDGE]: Hotkey listener unavailable ({e})", kind="error")
+
+        # Emit initial state/settings/intents immediately on startup
+        self.emit_state(*self._current_state)
+        self.emit_settings()
+        self.emit_intents()
+
+        try:
+            for raw_line in stream:
+                line = raw_line.strip()
+                if not line:
+                    continue
+                try:
+                    msg = json.loads(line)
+                except json.JSONDecodeError as e:
+                    self.emit_log(f"[BRIDGE]: Invalid JSON input: {e}", kind="error")
+                    continue
+                if isinstance(msg, dict):
+                    try:
+                        self.handle_message(msg)
+                    except Exception as e:
+                        self.emit_log(f"[BRIDGE]: Command error: {e}", kind="error")
+        except KeyboardInterrupt:
+            pass
+        finally:
+            try:
+                self.daemon.shutdown()
+            except Exception:
+                pass
+
+
+def main() -> None:
+    if sys.platform == "win32":
+        for stream_name in ("stdin", "stdout", "stderr"):
+            stream = getattr(sys, stream_name, None)
+            if stream is not None and hasattr(stream, "reconfigure"):
+                try:
+                    stream.reconfigure(encoding="utf-8")
+                except Exception:
+                    pass
+
+    # Reserve real stdout exclusively for JSON-Lines events; route print() to stderr
+    json_out = sys.stdout
+    sys.stdout = sys.stderr
+
+    bridge = StdioBridge(out_stream=json_out)
+    bridge.serve_forever()
+
+
+if __name__ == "__main__":
+    main()
