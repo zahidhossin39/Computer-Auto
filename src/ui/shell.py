@@ -1230,12 +1230,41 @@ class AppShell:
         tray_chk.pack(fill="x", pady=(0, SPACE_SM))
 
         srow = tk.Frame(app_card, bg=t.surface_container_high)
-        srow.pack(fill="x")
+        srow.pack(fill="x", pady=(0, SPACE_SM))
         self._label(srow, "Max vision steps per task", bg_role="surface_container_high", font=t.body_medium).pack(side="left")
         self.max_steps_var = tk.StringVar(value=str(s.get("max_vision_steps", 8)))
         steps_entry = self._entry(srow)
         steps_entry.configure(textvariable=self.max_steps_var, width=6, justify="center")
         steps_entry.pack(side="right", ipady=3)
+
+        from src.updater import APP_VERSION
+        urow = tk.Frame(app_card, bg=t.surface_container_high)
+        urow.pack(fill="x")
+        self.update_status_lbl = self._label(
+            urow,
+            f"Version v{APP_VERSION}",
+            bg_role="surface_container_high",
+            fg_role="on_surface_variant",
+            font=t.body_small,
+        )
+        self.update_status_lbl.pack(side="left")
+        self._pending_update = None
+        self.update_btn = tk.Button(
+            urow,
+            text="Check for Updates",
+            command=self._on_check_or_apply_update,
+            relief="flat",
+            bg=t.surface_container_highest,
+            fg=t.on_surface,
+            activebackground=t.primary_container,
+            activeforeground=t.on_primary_container,
+            font=t.label_small,
+            cursor="hand2",
+            bd=0,
+            padx=12,
+            pady=4,
+        )
+        self.update_btn.pack(side="right")
 
         # Save bar
         save_row = tk.Frame(scroll, bg=t.surface_container)
@@ -1792,6 +1821,84 @@ class AppShell:
 
         if self.root:
             self.root.after(0, apply)
+
+    def _on_check_or_apply_update(self) -> None:
+        from src.updater import (
+            APP_VERSION,
+            apply_windows_exe_update,
+            check_for_update,
+            download_update,
+        )
+
+        pending = getattr(self, "_pending_update", None)
+        if pending is not None:
+            self.update_btn.configure(state="disabled", text="Downloading...")
+            self.update_status_lbl.configure(text=f"Downloading v{pending.version}...")
+
+            def do_download() -> None:
+                try:
+                    if getattr(sys, "frozen", False):
+                        dest = Path(sys.executable).with_name("Computer-Auto.exe.new")
+                    else:
+                        dest = Path("dist") / "Computer-Auto.exe"
+
+                    def on_prog(done: int, total: int) -> None:
+                        pct = f"{int(done * 100 / total)}%" if total > 0 else f"{done // (1024 * 1024)} MB"
+                        self._post_ui(lambda p=pct: self.update_status_lbl.configure(text=f"Downloading... {p}"))
+
+                    new_path = download_update(pending.download_url, dest, progress_cb=on_prog)
+                    if apply_windows_exe_update(new_path):
+                        self._post_ui(lambda: self.update_status_lbl.configure(text="Restarting to apply update..."))
+                        self._post_ui(lambda: self.root.after(200, self.root.quit) if self.root else None)
+                    else:
+                        self._post_ui(
+                            lambda: (
+                                self.update_status_lbl.configure(text=f"Saved to {new_path}"),
+                                self.update_btn.configure(state="normal", text="Check for Updates"),
+                            )
+                        )
+                        self._pending_update = None
+                except Exception as exc:
+                    self._post_ui(
+                        lambda e=exc: (
+                            self.update_status_lbl.configure(text=f"Update failed: {e}"),
+                            self.update_btn.configure(state="normal", text=f"Update to v{pending.version}"),
+                        )
+                    )
+
+            threading.Thread(target=do_download, daemon=True).start()
+            return
+
+        self.update_btn.configure(state="disabled", text="Checking...")
+        self.update_status_lbl.configure(text="Checking GitHub Releases...")
+
+        def do_check() -> None:
+            try:
+                info = check_for_update(APP_VERSION)
+                if info is None:
+                    self._post_ui(
+                        lambda: (
+                            self.update_status_lbl.configure(text=f"Up to date (v{APP_VERSION})"),
+                            self.update_btn.configure(state="normal", text="Check for Updates"),
+                        )
+                    )
+                else:
+                    self._pending_update = info
+                    self._post_ui(
+                        lambda: (
+                            self.update_status_lbl.configure(text=f"Update available: v{info.version}"),
+                            self.update_btn.configure(state="normal", text=f"Update to v{info.version}"),
+                        )
+                    )
+            except Exception as exc:
+                self._post_ui(
+                    lambda e=exc: (
+                        self.update_status_lbl.configure(text=f"Check failed: {e}"),
+                        self.update_btn.configure(state="normal", text="Check for Updates"),
+                    )
+                )
+
+        threading.Thread(target=do_check, daemon=True).start()
 
     def _save_settings(self) -> None:
         try:
