@@ -1,0 +1,24 @@
+[package]
+name = "computer-auto"
+version = "2.0.0"
+description = "Computer-Auto v2.0 Native Desktop Assistant"
+authors = ["Zaid Hossain"]
+edition = "2021"
+
+[lib]
+name = "computer_auto_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "Computer-Auto"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = { version = "2.10", features = ["json"] }
+dirs = "5"

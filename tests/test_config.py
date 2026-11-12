@@ -1,8 +1,28 @@
 """Tests for configuration and intent loader."""
 
+import json
+import os
 from pathlib import Path
 import pytest
-from src.config import load_config, load_intents, Intent, IntentAction
+from src import config as cfg_mod
+from src.config import (
+    DEFAULT_VISION_MODEL,
+    Intent,
+    IntentAction,
+    load_config,
+    load_intents,
+    load_merged_settings,
+    save_merged_settings,
+)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_host_paths(tmp_path, monkeypatch):
+    """Prevent tests from reading/writing host AppData or D:\\Vibe-coding\\Computer-Auto\\.env."""
+    monkeypatch.setattr(cfg_mod, "SETTINGS_PATH", tmp_path / "app" / "settings.json")
+    monkeypatch.setattr(cfg_mod, "REPO_ROOT_ENV_PATH", tmp_path / "repo" / ".env")
+    monkeypatch.setattr(cfg_mod, "get_appdata_dir", lambda: tmp_path / "appdata")
+    monkeypatch.setattr(cfg_mod, "get_app_dir", lambda: tmp_path / "app")
 
 
 def test_load_default_intents():
@@ -106,3 +126,50 @@ def test_optional_config_fields_defaults_and_overrides(tmp_path, monkeypatch):
     settings_file.write_text(json.dumps({"max_vision_steps": "bad"}), encoding="utf-8")
     cfg_bad = load_config()
     assert cfg_bad.max_vision_steps == 8
+    assert cfg_bad.vision_model == DEFAULT_VISION_MODEL
+
+
+def test_dotenv_precedence_by_mtime_and_missing_key(tmp_path, monkeypatch):
+    """Newer .env key overrides stale settings.json; newer settings.json wins over .env."""
+    app_dir = tmp_path / "app"
+    app_dir.mkdir(parents=True, exist_ok=True)
+    env_file = app_dir / ".env"
+    settings_file = app_dir / "settings.json"
+    monkeypatch.setattr(cfg_mod, "SETTINGS_PATH", settings_file)
+
+    env_file.write_text("OPENROUTER_API_KEY=sk-from-dotenv-new\n", encoding="utf-8")
+    settings_file.write_text(json.dumps({"openrouter_api_key": "sk-old-stale"}), encoding="utf-8")
+
+    # Make settings.json older than .env
+    env_mtime = env_file.stat().st_mtime
+    os.utime(settings_file, (env_mtime - 100, env_mtime - 100))
+
+    merged = load_merged_settings()
+    assert merged["openrouter_api_key"] == "sk-from-dotenv-new"
+
+    # Now simulate explicit save_merged_settings() after .env
+    os.utime(env_file, (env_mtime - 200, env_mtime - 200))
+    save_merged_settings({"openrouter_api_key": "sk-explicit-ui-save"})
+    merged2 = load_merged_settings()
+    assert merged2["openrouter_api_key"] == "sk-explicit-ui-save"
+    assert os.environ["OPENROUTER_API_KEY"] == "sk-explicit-ui-save"
+    assert (tmp_path / "appdata" / "settings.json").is_file()
+
+
+def test_deprecated_model_auto_upgraded(tmp_path, monkeypatch):
+    """Deprecated google/gemini-3.1-flash-lite is auto-upgraded to google/gemini-2.5-flash."""
+    app_dir = tmp_path / "app"
+    app_dir.mkdir(parents=True, exist_ok=True)
+    settings_file = app_dir / "settings.json"
+    settings_file.write_text(
+        json.dumps({
+            "vision_model": "google/gemini-3.1-flash-lite",
+            "stt_cloud_model": "google/gemini-3.1-flash-lite",
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cfg_mod, "SETTINGS_PATH", settings_file)
+
+    cfg = load_config()
+    assert cfg.vision_model == "google/gemini-2.5-flash"
+    assert cfg.stt_cloud_model == "google/gemini-2.5-flash"
