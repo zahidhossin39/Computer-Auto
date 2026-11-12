@@ -27,7 +27,9 @@ export interface IntentCommand {
 }
 
 export interface AppSettings {
+  vision_api_key?: string;
   openrouter_api_key?: string;
+  vision_api_base?: string;
   base_url?: string;
   vision_model: string;
   stt_engine?: "parakeet" | "cloud";
