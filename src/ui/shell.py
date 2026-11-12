@@ -7,6 +7,7 @@ Preserves two core invariants:
 """
 
 import os
+import queue
 import sys
 import threading
 import time
@@ -152,6 +153,9 @@ class AppShell:
         self._theme_updaters: List[Callable[[Theme], None]] = []
         self._scroll_canvases: List[tk.Canvas] = []
         self._panel_size = (PANEL_W, PANEL_H)
+        self._model_downloading = False
+        self._fallback_dl_cancel: Optional[threading.Event] = None
+        self._ui_queue: "queue.Queue[Callable[[], None]]" = queue.Queue()
 
     # ---------- construction ----------
 
@@ -620,6 +624,8 @@ class AppShell:
             )
             self._panes[other].pack_forget()
         self._panes[name].pack(fill="both", expand=True)
+        if name == "Settings" and hasattr(self, "offline_model_status"):
+            self._refresh_offline_model_ui()
 
     def _chip(self, parent, text: str, command: Callable[[], None]) -> tk.Button:
         t = self.theme
@@ -1130,6 +1136,50 @@ class AppShell:
         )
         self._dropdown(voice_card, self.voice_var, list(VOICE_ENGINES)).pack(fill="x")
 
+        # Offline Model section
+        offline_box = tk.Frame(
+            voice_card,
+            bg=t.surface_container_low,
+            highlightthickness=1,
+            highlightbackground=t.outline_variant,
+            padx=SPACE_SM,
+            pady=SPACE_SM,
+        )
+        offline_box.pack(fill="x", pady=(SPACE_SM, 0))
+
+        offline_top = tk.Frame(offline_box, bg=t.surface_container_low)
+        offline_top.pack(fill="x")
+        self.offline_model_status = tk.Label(
+            offline_top,
+            text=self._offline_model_status_text(),
+            bg=t.surface_container_low,
+            fg=t.success if self._has_local_model() else t.on_surface_variant,
+            font=t.body_small,
+            anchor="w",
+        )
+        self.offline_model_status.pack(side="left", fill="x", expand=True)
+        self.offline_model_btn = tk.Button(
+            offline_top,
+            text="Download Model",
+            command=self._toggle_model_download,
+            relief="flat",
+            bd=0,
+            padx=10,
+            pady=3,
+            cursor="hand2",
+            font=t.label_small,
+        )
+        self.offline_model_btn.pack(side="right", padx=(SPACE_SM, 0))
+        self.offline_model_progress = tk.Label(
+            offline_box,
+            text="",
+            bg=t.surface_container_low,
+            fg=t.on_surface_variant,
+            font=t.body_small,
+            anchor="w",
+        )
+        self._refresh_offline_model_ui()
+
         self.jev_var = tk.BooleanVar(value=s.get("use_jev", True))
         jev_chk = tk.Checkbutton(
             voice_card,
@@ -1212,6 +1262,10 @@ class AppShell:
         def _retheme_settings(th: Theme) -> None:
             for r in (row, mrow, erow, trow, srow):
                 r.configure(bg=th.surface_container_high)
+            offline_box.configure(bg=th.surface_container_low, highlightbackground=th.outline_variant)
+            offline_top.configure(bg=th.surface_container_low)
+            self.offline_model_progress.configure(bg=th.surface_container_low, fg=th.on_surface_variant)
+            self._refresh_offline_model_ui()
             save_row.configure(bg=th.surface_container)
             for chk in (jev_chk, tray_chk):
                 chk.configure(
@@ -1550,6 +1604,141 @@ class AppShell:
             except Exception:
                 pass
         return names
+
+    def _has_local_model(self) -> bool:
+        rec = getattr(self.daemon, "recognizer", None) if self.daemon is not None else None
+        return bool(getattr(rec, "has_local_model", False))
+
+    def _offline_model_status_text(self) -> str:
+        if self._has_local_model():
+            return "Offline Model: Ready (Parakeet INT8)"
+        return "Offline Model: Not downloaded (~400 MB for offline voice)"
+
+    def _refresh_offline_model_ui(self) -> None:
+        if not hasattr(self, "offline_model_status") or not hasattr(self, "offline_model_btn"):
+            return
+        t = self.theme
+        ready = self._has_local_model()
+        self.offline_model_status.configure(
+            text=self._offline_model_status_text(),
+            bg=t.surface_container_low,
+            fg=t.success if ready else t.on_surface_variant,
+        )
+        if self._model_downloading:
+            self.offline_model_btn.configure(
+                text="Cancel",
+                bg=t.error_container,
+                fg=t.on_error_container,
+                activebackground=t.error,
+                activeforeground=t.on_error,
+            )
+        else:
+            self.offline_model_btn.configure(
+                text="Download Model",
+                bg=t.primary_container,
+                fg=t.on_primary_container,
+                activebackground=t.primary,
+                activeforeground=t.on_primary,
+            )
+
+    def _post_ui(self, fn: Callable[[], None]) -> None:
+        """Schedule a callback on the Tk main thread safely, even if mainloop is not active."""
+        if not self._is_running or self.root is None:
+            return
+        self._ui_queue.put(fn)
+        try:
+            self.root.after(0, self._drain_ui_queue)
+        except (RuntimeError, tk.TclError):
+            pass
+
+    def _drain_ui_queue(self) -> None:
+        while True:
+            try:
+                fn = self._ui_queue.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                if self._is_running:
+                    fn()
+            except Exception:
+                pass
+
+    def _set_model_progress(self, text: str) -> None:
+        if not self._is_running or not hasattr(self, "offline_model_progress"):
+            return
+        if text:
+            self.offline_model_progress.configure(text=text)
+            if not self.offline_model_progress.winfo_ismapped():
+                self.offline_model_progress.pack(fill="x", pady=(SPACE_XS, 0))
+        else:
+            self.offline_model_progress.configure(text="")
+            self.offline_model_progress.pack_forget()
+
+    def _toggle_model_download(self) -> None:
+        if self._model_downloading:
+            if self.daemon is not None and hasattr(self.daemon, "cancel_model_download"):
+                self.daemon.cancel_model_download()
+            elif self._fallback_dl_cancel is not None:
+                self._fallback_dl_cancel.set()
+            self._set_model_progress("Canceling download...")
+            return
+
+        self._model_downloading = True
+        self._refresh_offline_model_ui()
+        self._set_model_progress("Starting download...")
+        threading.Thread(target=self._download_model_worker, name="model-dl-ui", daemon=True).start()
+
+    def _download_model_worker(self) -> None:
+        ok = False
+        err_msg = ""
+
+        def on_progress(done_bytes: int, total_bytes: int, stage: str) -> None:
+            if total_bytes > 0 and "extract" not in stage.lower():
+                pct = min(100, int(done_bytes * 100 / total_bytes))
+                done_mb = done_bytes / (1024 * 1024)
+                total_mb = total_bytes / (1024 * 1024)
+                msg = f"Downloading... {pct}% ({done_mb:.0f} / {total_mb:.0f} MB)"
+            else:
+                msg = stage
+            self._post_ui(lambda m=msg: self._set_model_progress(m))
+
+        try:
+            if self.daemon is not None and hasattr(self.daemon, "download_offline_model"):
+                ok = bool(self.daemon.download_offline_model(progress_cb=on_progress))
+            else:
+                from pathlib import Path
+                from src.config import get_app_dir
+                from src.stt.engine import download_parakeet_model
+
+                self._fallback_dl_cancel = threading.Event()
+                rec = getattr(self.daemon, "recognizer", None) if self.daemon is not None else None
+                target = getattr(rec, "model_dir", None) or (get_app_dir() / "models" / "parakeet-tdt-0.6b-int8")
+                download_parakeet_model(Path(target), progress_cb=on_progress, cancel_event=self._fallback_dl_cancel)
+                if rec is not None and hasattr(rec, "reload_local_model"):
+                    ok = bool(rec.reload_local_model())
+                else:
+                    ok = True
+        except InterruptedError:
+            ok = False
+            err_msg = "Download canceled"
+        except Exception as e:
+            ok = False
+            err_msg = f"Download failed: {e}"[:60]
+        finally:
+            self._fallback_dl_cancel = None
+            self._post_ui(lambda: self._finish_model_download(ok, err_msg))
+
+    def _finish_model_download(self, ok: bool, err_msg: str = "") -> None:
+        self._model_downloading = False
+        self._refresh_offline_model_ui()
+        if ok:
+            self._set_model_progress("Model ready!")
+            if self._is_running and self.root is not None:
+                self.root.after(2500, lambda: self._set_model_progress(""))
+        elif err_msg:
+            self._set_model_progress(err_msg)
+        else:
+            self._set_model_progress("")
 
     def _test_key(self) -> None:
         self.key_status.config(text="Testing…", fg=self.theme.on_surface_variant)
