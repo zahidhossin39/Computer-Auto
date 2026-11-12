@@ -16,7 +16,7 @@ import re
 import threading
 import time
 import winsound
-from typing import Optional
+from typing import Callable, Optional
 
 # Ensure UTF-8 output on Windows consoles
 if sys.platform == "win32":
@@ -42,7 +42,7 @@ except Exception:
 from src import apps
 from src.audio.recorder import AudioRecorder
 from src.trigger.hotkey import GlobalHotkeyListener
-from src.stt.engine import SpeechRecognizer
+from src.stt.engine import SpeechRecognizer, download_parakeet_model
 from src.router.router import CommandRouter
 from src.executor.windows import WindowsExecutor
 from src.executor.guardrail import SafetyGuardrail
@@ -135,6 +135,8 @@ class ComputerAutoDaemon:
         self._listening_active = False
         self._pending_confirmation: Optional[str] = None
         self._pending_vision_context: Optional[dict] = None
+        self._download_lock = threading.Lock()
+        self._download_cancel_event: Optional[threading.Event] = None
         self._last_command = ""  # for "repeat that"
         self.continuous = False  # a listening session is active: re-arm the mic after every command
 
@@ -309,6 +311,57 @@ class ComputerAutoDaemon:
                 self.hotkey_listener.detector.is_listening = True
                 self.on_listening_toggle(True)
 
+    def download_offline_model(
+        self, progress_cb: Optional[Callable[[int, int, str], None]] = None
+    ) -> bool:
+        """Download and load the offline Parakeet STT model, preventing overlapping runs."""
+        if not self._download_lock.acquire(blocking=False):
+            self.ui_log("[STT]: Offline model download already in progress.")
+            return False
+
+        cancel_ev = threading.Event()
+        self._download_cancel_event = cancel_ev
+        try:
+            raw_dir = getattr(self.recognizer, "model_dir", None)
+            if raw_dir:
+                target_dir = Path(raw_dir)
+            elif self.config.stt_model_dir:
+                target_dir = Path(self.config.stt_model_dir)
+            else:
+                target_dir = Path("models") / "parakeet-tdt-0.6b-int8"
+            if not target_dir.is_absolute():
+                target_dir = get_app_dir() / target_dir
+
+            self.recognizer.model_dir = target_dir
+            download_parakeet_model(target_dir, progress_cb=progress_cb, cancel_event=cancel_ev)
+            ok = bool(self.recognizer.reload_local_model())
+            self.update_ui(
+                "ready",
+                "Offline voice model ready" if ok else "Offline model setup incomplete",
+            )
+            self.ui_log(
+                "[STT]: Offline Parakeet model ready." if ok else "[STT]: Offline model files downloaded, reload incomplete."
+            )
+            return ok
+        except InterruptedError:
+            self.ui_log("[STT]: Offline model download canceled.")
+            self.update_ui("ready", "Download canceled")
+            return False
+        except Exception as e:
+            print(f"[STT]: Model download failed: {e}")
+            self.ui_log(f"[STT]: Model download failed: {e}")
+            self.update_ui("ready", "Model download failed", str(e)[:45])
+            return False
+        finally:
+            self._download_cancel_event = None
+            self._download_lock.release()
+
+    def cancel_model_download(self) -> None:
+        """Signal any active offline model download to cancel."""
+        ev = self._download_cancel_event
+        if ev is not None:
+            ev.set()
+
     def _transcribe_and_handle(self) -> None:
         samples = self.recorder.stop()
 
@@ -319,8 +372,20 @@ class ComputerAutoDaemon:
             self.ui_log(f"[AUDIO WARNING]: No audio captured -> {err_msg}")
             return
 
+        if not getattr(self.recognizer, "is_ready", True):
+            msg = "Offline voice model not downloaded — download in Settings or pick Cloud STT"
+            print(f"[STT]: {msg}")
+            self.update_ui("ready", msg, "Open Settings to download")
+            self.ui_log(f"[STT]: {msg}")
+            return
+
         text = self.recognizer.transcribe(samples, sample_rate=self.recorder.sample_rate)
         if not text:
+            if not getattr(self.recognizer, "is_ready", True):
+                msg = "Offline voice model not downloaded — download in Settings or pick Cloud STT"
+                self.update_ui("ready", msg, "Open Settings to download")
+                self.ui_log(f"[STT]: {msg}")
+                return
             print("[WARNING] Could not recognize speech.")
             self.update_ui("ready", "Ready — Could not recognize audio", "Speak clearly into mic")
             self.ui_log("[STT]: No speech recognized (silence or low volume).")
@@ -746,6 +811,12 @@ class ComputerAutoDaemon:
         print("  -> Press [Ctrl + C] in this console to exit.")
 
         if self.ui:
+            if not getattr(self.recognizer, "is_ready", True):
+                self.update_ui(
+                    "ready",
+                    "Offline voice model missing — open Settings to download",
+                    "Typed commands still work",
+                )
             try:
                 self.ui.mainloop()
             except KeyboardInterrupt:

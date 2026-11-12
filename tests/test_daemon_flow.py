@@ -496,3 +496,71 @@ def test_recorder_on_level_wired_to_ui_set_audio_level(monkeypatch):
 
     daemon = ComputerAutoDaemon(mock_stt=True, mock_vision=True, ui_mode="app")
     assert daemon.recorder.on_level is fake_ui.set_audio_level
+
+
+def test_transcribe_and_handle_missing_model_shows_download_hint():
+    """When recognizer.is_ready is False, _transcribe_and_handle gives an actionable Settings hint."""
+    daemon = _make_daemon()
+    daemon.ui = MagicMock()
+    daemon.recorder.stop.side_effect = None
+    daemon.recorder.stop.return_value = np.ones(16000, dtype=np.float32) * 0.1
+    daemon.recognizer = MagicMock()
+    daemon.recognizer.is_ready = False
+
+    daemon._transcribe_and_handle()
+
+    daemon.recognizer.transcribe.assert_not_called()
+    assert "Offline voice model not downloaded" in daemon.ui.update_state.call_args[0][1]
+
+
+def test_run_startup_sets_missing_model_hint(monkeypatch):
+    """On startup with UI, missing STT model surfaces a Settings download hint."""
+    fake_ui = MagicMock()
+    monkeypatch.setattr("main.AppShell", lambda **kw: fake_ui)
+    daemon = ComputerAutoDaemon(mock_stt=True, mock_vision=True, ui_mode="app")
+    daemon.hotkey_listener = MagicMock()
+    daemon.recognizer = MagicMock()
+    daemon.recognizer.is_ready = False
+
+    daemon.run()
+
+    assert any(
+        "Offline voice model missing" in call[0][1]
+        for call in fake_ui.update_state.call_args_list
+    )
+
+
+def test_download_offline_model_and_cancel(monkeypatch, tmp_path):
+    """download_offline_model calls download_parakeet_model + reload_local_model, and cancel aborts."""
+    daemon = _make_daemon()
+    daemon.ui = MagicMock()
+    daemon.recognizer = MagicMock()
+    daemon.recognizer.model_dir = tmp_path / "parakeet"
+    daemon.recognizer.reload_local_model.return_value = True
+
+    calls = []
+
+    def fake_download(target_dir, progress_cb=None, cancel_event=None):
+        calls.append((target_dir, progress_cb, cancel_event))
+        if progress_cb:
+            progress_cb(50, 100, "Downloading...")
+        return target_dir
+
+    monkeypatch.setattr("main.download_parakeet_model", fake_download)
+    cb = MagicMock()
+    assert daemon.download_offline_model(progress_cb=cb) is True
+    assert len(calls) == 1
+    assert calls[0][0] == tmp_path / "parakeet"
+    cb.assert_called_once_with(50, 100, "Downloading...")
+    daemon.recognizer.reload_local_model.assert_called_once()
+    assert "Offline voice model ready" in daemon.ui.update_state.call_args[0][1]
+
+    # Cancel path
+    def fake_cancel_download(target_dir, progress_cb=None, cancel_event=None):
+        daemon.cancel_model_download()
+        assert cancel_event.is_set()
+        raise InterruptedError("cancelled")
+
+    monkeypatch.setattr("main.download_parakeet_model", fake_cancel_download)
+    assert daemon.download_offline_model() is False
+    assert "Download canceled" in daemon.ui.update_state.call_args[0][1]
