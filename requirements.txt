@@ -12,8 +12,9 @@ pillow>=10.0.0
 mss>=9.0.1
 
 # AI & APIs
-google-genai>=0.1.1
+requests>=2.31.0
 pyyaml>=6.0.1
+python-dotenv>=1.0.0
 
 # Local Voice Feedback (Windows uses native SAPI5 SpVoice via pywin32)
 # piper-tts>=1.2.0 (optional, non-Windows)
@@ -21,5 +22,4 @@ pyyaml>=6.0.1
 # Testing & Dev
 pytest>=8.0.0
 pytest-mock>=3.12.0
-requests>=2.31
 uiautomation>=2.0
