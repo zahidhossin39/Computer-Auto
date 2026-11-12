@@ -141,7 +141,7 @@ if __name__ == "__main__":
     all_passed = True
 
     for test_fn in [
-        test_bug1_hud_pill_renders_visible,
+        test_bug1_shell_pill_renders_visible,
         test_bug2_double_tap_fires_callback,
         test_bug2_no_race_condition,
         test_bug2_win32_poller_starts,

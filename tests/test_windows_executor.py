@@ -139,3 +139,72 @@ def test_close_targets_other_window_not_our_own(executor):
         assert executor.execute_system_action("window_close_active") is True
     mock_gui.PostMessage.assert_called_once_with(4242, 16, 0, 0)
     mock_hotkey.assert_not_called()
+
+
+def test_run_action_minimize_maximize_restore_window(executor):
+    """run_action supports minimize_window, maximize_window, restore_window and handles None win32gui."""
+    mock_gui = Mock()
+    mock_con = Mock(SW_MINIMIZE=6, SW_MAXIMIZE=3, SW_RESTORE=9)
+    with patch("src.executor.windows.win32gui", mock_gui), patch("src.executor.windows.win32con", mock_con):
+        assert executor.run_action(IntentAction(type="minimize_window", target="101")) is True
+        assert executor.run_action(IntentAction(type="maximize_window", target="102")) is True
+        assert executor.run_action(IntentAction(type="restore_window", target="103")) is True
+
+    mock_gui.ShowWindow.assert_any_call(101, 6)
+    mock_gui.ShowWindow.assert_any_call(102, 3)
+    mock_gui.ShowWindow.assert_any_call(103, 9)
+
+    with patch("src.executor.windows.win32gui", None):
+        assert executor.run_action(IntentAction(type="minimize_window", target="101")) is False
+        assert executor.run_action(IntentAction(type="maximize_window", target="102")) is False
+        assert executor.run_action(IntentAction(type="restore_window", target="103")) is False
+
+
+def test_run_action_open_app_and_open_url_fallbacks(executor):
+    """open_app and open_url fall back when _shell_launch returns False."""
+    with patch("src.executor.windows._shell_launch", return_value=False), \
+         patch("os.startfile", create=True) as mock_startfile:
+        assert executor.run_action(IntentAction(type="open_app", target="Claude.AppID")) is True
+        assert "shell:AppsFolder\\Claude.AppID" in mock_startfile.call_args[0][0]
+
+    with patch("src.executor.windows._shell_launch", return_value=False), \
+         patch("os.startfile", side_effect=OSError("fail"), create=True), \
+         patch("subprocess.Popen") as mock_popen:
+        assert executor.run_action(IntentAction(type="open_app", target="Claude.AppID")) is True
+        mock_popen.assert_called_once()
+
+    with patch("src.executor.windows._shell_launch", return_value=False), \
+         patch("os.startfile", side_effect=OSError("fail"), create=True), \
+         patch("webbrowser.open", return_value=True) as mock_wb:
+        assert executor.run_action(IntentAction(type="open_url", target="https://example.com")) is True
+        mock_wb.assert_called_once_with("https://example.com")
+
+
+def test_type_text_preserves_non_text_clipboard_formats():
+    """type_text saves and restores non-text clipboard formats (e.g. CF_DIB) alongside text."""
+    import sys
+    from src.executor.windows import type_text
+
+    CF_DIB = 8
+    CF_UNICODETEXT = 13
+    clip_state = {CF_UNICODETEXT: "old text", CF_DIB: b"\x28\x00\x00\x00fake_dib"}
+    enum_order = [CF_UNICODETEXT, CF_DIB, 0]
+
+    mock_clip = Mock()
+    mock_clip.CF_UNICODETEXT = CF_UNICODETEXT
+    mock_clip.EnumClipboardFormats.side_effect = lambda fmt: (
+        enum_order[0] if fmt == 0 else enum_order[enum_order.index(fmt) + 1]
+    )
+    mock_clip.GetClipboardData.side_effect = lambda fmt: clip_state[fmt]
+    mock_clip.EmptyClipboard.side_effect = lambda: clip_state.clear()
+    mock_clip.SetClipboardText.side_effect = lambda val, fmt=CF_UNICODETEXT: clip_state.__setitem__(fmt, val)
+    mock_clip.SetClipboardData.side_effect = lambda fmt, val: clip_state.__setitem__(fmt, val)
+
+    with patch.dict(sys.modules, {"win32clipboard": mock_clip}), \
+         patch("src.executor.windows.send_hotkey") as mock_hotkey, \
+         patch("time.sleep"):
+        type_text("hello world")
+
+    mock_hotkey.assert_called_once_with("ctrl", "v")
+    assert clip_state[CF_UNICODETEXT] == "old text"
+    assert clip_state[CF_DIB] == b"\x28\x00\x00\x00fake_dib"

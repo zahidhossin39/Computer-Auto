@@ -20,7 +20,11 @@ except ImportError:
 
 TRANSCRIBE_URL = "https://openrouter.ai/api/v1/audio/transcriptions"
 # Names the local model mishears; the cloud model takes them as a spelling hint
-VOCAB_HINT = "Claude, Claude Code, Chrome, Discord, VS Code, Notepad, new tab, YouTube, Gmail"
+VOCAB_HINT = (
+    "Claude, Claude Code, Chrome, Discord, VS Code, Notepad, Explorer, Terminal, "
+    "PowerShell, Spotify, Slack, Teams, Settings, Calculator, new tab, close tab, "
+    "close window, minimize, maximize, restore, switch to, YouTube, Gmail, GitHub, ChatGPT"
+)
 
 
 class SpeechRecognizer:
@@ -97,12 +101,16 @@ class SpeechRecognizer:
         if samples is None or len(samples) == 0:
             return ""
 
+        samples = np.asarray(samples, dtype=np.float32)
+        if samples.size > 0 and float(np.ptp(samples)) > 1e-6:
+            samples = (samples - float(np.mean(samples))).astype(np.float32)
+
         duration = len(samples) / sample_rate
         peak = float(np.max(np.abs(samples))) if samples.size else 0.0
 
-        # Matches the recorder's own speech threshold (peak 0.010): anything it
-        # considered speech must reach the model, or quiet speech vanishes silently.
-        if duration < 0.4 or peak < 0.010:
+        # Matches the recorder's silence threshold (peak 0.008): soft spoken commands
+        # that triggered VAD must reach the model instead of being silently dropped.
+        if duration < 0.4 or peak < 0.008:
             print(f"[STT]: ignored {duration:.2f}s of audio (peak {peak:.3f}) - too short or too quiet")
             return ""
 
@@ -110,9 +118,8 @@ class SpeechRecognizer:
             return "mock transcription"
 
         # Normalize soft audio to nominal acoustic range (0.5 peak) to aid Sherpa recognition
-        max_amp = float(np.max(np.abs(samples))) if len(samples) > 0 else 0.0
-        if 0.002 < max_amp < 0.25:
-            samples = (samples / max_amp * 0.5).astype(np.float32)
+        if 0.002 < peak < 0.25:
+            samples = (samples / peak * 0.5).astype(np.float32)
 
         text = self._transcribe_cloud(samples, sample_rate) if self.cloud_model else ""
         if not text and self._recognizer is not None:

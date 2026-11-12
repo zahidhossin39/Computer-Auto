@@ -38,7 +38,7 @@ def load() -> None:
         _loaded.set()
 
 
-def find(spoken: str) -> Optional[Tuple[str, str]]:
+def find(spoken: str, allow_jev: bool = True) -> Optional[Tuple[str, str]]:
     """(display name, AppID) of the app the user most likely meant, or None."""
     _loaded.wait(timeout=5)
     q = spoken.lower().strip()
@@ -55,8 +55,8 @@ def find(spoken: str) -> Optional[Tuple[str, str]]:
     hits = [n for n in _apps if all(w in n.split() for w in words)]
     if len(hits) == 1:
         return _names[hits[0]], _apps[hits[0]]
-    if len(words) > 3:
-        return None  # a sentence, not an app name: let the vision agent read it
+    if not allow_jev or len(words) > 3:
+        return None  # a sentence, not an app name, or Jev lookup disabled: let caller handle it
     names = list(_apps)[:254]
     picked = jev.choose(
         {"spoken_app_name": spoken, "note": "text comes from speech recognition and may be misheard"},
@@ -106,8 +106,8 @@ def find_window(spoken: str):
         hay = set(re.findall(r"\w+", f"{title.lower()} {exe[:-4]}"))  # whole words: "mail" != "gmail"
         if all(w in hay for w in words):
             return hwnd, title
-    # "note pad", "vs code": resolve through the app index, then match its name
-    app = find(" ".join(words))
+    # "note pad", "vs code": resolve through the app index, then match its name (no Jev call)
+    app = find(" ".join(words), allow_jev=False)
     if app:
         name = app[0].lower()
         for hwnd, title, exe in wins:
