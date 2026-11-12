@@ -124,3 +124,112 @@ def test_parakeet_integration_en_wav():
 
     text = recognizer.transcribe(pcm, sample_rate=sr)
     assert isinstance(text, str) and len(text) > 0
+
+
+def test_readiness_properties_and_missing_model_transcribe(tmp_path, capsys):
+    """has_local_model, is_ready, reload_local_model, and missing-model transcribe log."""
+    rec = SpeechRecognizer(model_dir=str(tmp_path), mock_mode=False)
+    assert rec.model_dir == tmp_path
+    assert rec.has_local_model is False
+    assert rec.is_ready is False
+
+    # Audio with no local model and no cloud model logs clear message and returns ""
+    audio = np.ones(16000, dtype=np.float32) * 0.2
+    assert rec.transcribe(audio) == ""
+    captured = capsys.readouterr().out
+    assert "offline model not downloaded" in captured
+
+    # Cloud model or mock_mode marks recognizer ready even without local weights
+    rec_cloud = SpeechRecognizer(model_dir=str(tmp_path), mock_mode=False, cloud_model="openai/gpt-4o-transcribe")
+    assert rec_cloud.has_local_model is False
+    assert rec_cloud.is_ready is True
+
+    rec_mock = SpeechRecognizer(model_dir=None, mock_mode=True)
+    assert rec_mock.is_ready is True
+
+    # reload_local_model clears and re-runs _init_sherpa
+    rec._recognizer = Mock()
+    assert rec.has_local_model is True
+    with patch.object(rec, "_init_sherpa") as mock_init:
+        assert rec.reload_local_model() is False
+        mock_init.assert_called_once()
+
+
+def _make_tar_bz2_bytes(files: dict) -> bytes:
+    import io
+    import tarfile
+
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:bz2") as tar:
+        for name, content in files.items():
+            info = tarfile.TarInfo(name=name)
+            info.size = len(content)
+            tar.addfile(info, io.BytesIO(content))
+    return buf.getvalue()
+
+
+def test_download_parakeet_model_success_and_progress(tmp_path):
+    """download_parakeet_model streams archive, reports progress, and extracts the 4 required files."""
+    import io
+    from src.stt.engine import PARAKEET_REQUIRED_FILES, download_parakeet_model
+
+    archive_bytes = _make_tar_bz2_bytes({
+        "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/encoder.int8.onnx": b"enc",
+        "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/decoder.int8.onnx": b"dec",
+        "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/joiner.int8.onnx": b"joi",
+        "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/tokens.txt": b"tok",
+        "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/README.md": b"ignored",
+    })
+
+    class FakeResp(io.BytesIO):
+        headers = {}  # Intentionally omit Content-Length to test total_bytes == 0 handling
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.close()
+
+    progress_calls = []
+    dest = tmp_path / "models" / "parakeet-tdt-0.6b-int8"
+    with patch("urllib.request.urlopen", return_value=FakeResp(archive_bytes)):
+        out = download_parakeet_model(
+            dest,
+            progress_cb=lambda dl, tot, stage: progress_calls.append((dl, tot, stage)),
+        )
+
+    assert out == dest
+    for fname in PARAKEET_REQUIRED_FILES:
+        assert (dest / fname).is_file()
+    assert not (dest / "README.md").exists()
+    assert len(progress_calls) >= 2
+    assert progress_calls[-1][2] == "Offline speech model ready"
+
+
+def test_download_parakeet_model_cancel_cleans_up(tmp_path):
+    """Cancelling download_parakeet_model aborts cleanly and leaves no partial target files."""
+    import io
+    import threading
+    from src.stt.engine import download_parakeet_model
+
+    cancel = threading.Event()
+    dest = tmp_path / "parakeet"
+
+    class CancellingResp(io.BytesIO):
+        headers = {"Content-Length": "1000"}
+
+        def read(self, size=-1):
+            cancel.set()
+            return b"partial"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.close()
+
+    with patch("urllib.request.urlopen", return_value=CancellingResp(b"x" * 100)):
+        with pytest.raises(InterruptedError):
+            download_parakeet_model(dest, cancel_event=cancel)
+
+    assert not dest.exists()

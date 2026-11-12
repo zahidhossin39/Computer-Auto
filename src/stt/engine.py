@@ -3,7 +3,13 @@
 import io
 import os
 from pathlib import Path
-from typing import Optional
+import shutil
+import tarfile
+import tempfile
+import threading
+import time
+from typing import Callable, Optional
+import urllib.request
 import wave
 import numpy as np
 
@@ -19,6 +25,11 @@ except ImportError:
     sherpa_onnx = None
 
 TRANSCRIBE_URL = "https://openrouter.ai/api/v1/audio/transcriptions"
+PARAKEET_MODEL_URL = (
+    "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
+    "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2"
+)
+PARAKEET_REQUIRED_FILES = ("encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt")
 # Names the local model mishears; the cloud model takes them as a spelling hint
 VOCAB_HINT = (
     "Claude, Claude Code, Chrome, Discord, VS Code, Notepad, Explorer, Terminal, "
@@ -44,6 +55,22 @@ class SpeechRecognizer:
 
         if not self.mock_mode:
             self._init_sherpa()
+
+    @property
+    def has_local_model(self) -> bool:
+        """Whether the local Sherpa-ONNX Parakeet model is loaded."""
+        return self._recognizer is not None
+
+    @property
+    def is_ready(self) -> bool:
+        """Whether any transcription backend (mock, cloud, or local ONNX) is available."""
+        return bool(self.mock_mode or self.cloud_model or self._recognizer is not None)
+
+    def reload_local_model(self) -> bool:
+        """Re-initialize the local Sherpa-ONNX model (e.g. after downloading weights)."""
+        self._recognizer = None
+        self._init_sherpa()
+        return self._recognizer is not None
 
     def _init_sherpa(self) -> None:
         """Initialize Sherpa-ONNX recognizer if model files exist."""
@@ -101,6 +128,10 @@ class SpeechRecognizer:
         if samples is None or len(samples) == 0:
             return ""
 
+        if not self.is_ready:
+            print("[STT]: offline model not downloaded (and no cloud STT configured)")
+            return ""
+
         samples = np.asarray(samples, dtype=np.float32)
         if samples.size > 0 and float(np.ptp(samples)) > 1e-6:
             samples = (samples - float(np.mean(samples))).astype(np.float32)
@@ -135,3 +166,88 @@ class SpeechRecognizer:
         else:
             print(f"[STT]: no words recognised in {duration:.2f}s of audio (peak {peak:.3f})")
         return text
+
+
+def download_parakeet_model(
+    model_dir: Path,
+    progress_cb: Optional[Callable[[int, int, str], None]] = None,
+    cancel_event: Optional[threading.Event] = None,
+) -> Path:
+    """Download and extract the Parakeet TDT INT8 Sherpa-ONNX model files into `model_dir`."""
+    target_dir = Path(model_dir)
+    tmp_dir = Path(tempfile.mkdtemp(prefix="parakeet_dl_"))
+    archive_path = tmp_dir / "parakeet.tar.bz2"
+    staging_dir = tmp_dir / "staging"
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    required = set(PARAKEET_REQUIRED_FILES)
+
+    def _check_cancel() -> None:
+        if cancel_event is not None and cancel_event.is_set():
+            raise InterruptedError("Model download cancelled")
+
+    try:
+        _check_cancel()
+        downloaded = 0
+        total_bytes = 0
+        last_report = 0.0
+
+        with urllib.request.urlopen(PARAKEET_MODEL_URL, timeout=30) as resp:
+            raw_len = resp.headers.get("Content-Length") if resp.headers else None
+            try:
+                total_bytes = max(0, int(raw_len)) if raw_len else 0
+            except (TypeError, ValueError):
+                total_bytes = 0
+
+            if progress_cb is not None:
+                progress_cb(0, total_bytes, "Downloading offline speech model...")
+
+            with open(archive_path, "wb") as out_f:
+                while True:
+                    _check_cancel()
+                    chunk = resp.read(65536)
+                    if not chunk:
+                        break
+                    out_f.write(chunk)
+                    downloaded += len(chunk)
+                    now = time.monotonic()
+                    if progress_cb is not None and (now - last_report >= 0.1):
+                        last_report = now
+                        progress_cb(downloaded, total_bytes, "Downloading offline speech model...")
+
+        if progress_cb is not None:
+            progress_cb(downloaded, total_bytes, "Extracting model files...")
+
+        with tarfile.open(archive_path, "r:bz2") as tar:
+            for member in tar.getmembers():
+                _check_cancel()
+                member_path = Path(member.name)
+                if member.name.startswith(("/", "\\")) or ".." in member_path.parts:
+                    raise ValueError(f"Unsafe tar member path: {member.name}")
+                if not member.isfile():
+                    continue
+                fname = member_path.name
+                if fname not in required:
+                    continue
+                src_f = tar.extractfile(member)
+                if src_f is None:
+                    continue
+                with src_f, open(staging_dir / fname, "wb") as dst_f:
+                    shutil.copyfileobj(src_f, dst_f)
+
+        missing = [f for f in PARAKEET_REQUIRED_FILES if not (staging_dir / f).is_file()]
+        if missing:
+            raise FileNotFoundError(f"Missing model files in archive: {', '.join(missing)}")
+
+        _check_cancel()
+        target_dir.mkdir(parents=True, exist_ok=True)
+        for fname in PARAKEET_REQUIRED_FILES:
+            tmp_target = target_dir / f".{fname}.tmp"
+            shutil.copy2(staging_dir / fname, tmp_target)
+            os.replace(tmp_target, target_dir / fname)
+
+        if progress_cb is not None:
+            progress_cb(downloaded, total_bytes, "Offline speech model ready")
+
+        return target_dir
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
