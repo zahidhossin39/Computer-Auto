@@ -126,8 +126,9 @@ def test_parakeet_integration_en_wav():
     assert isinstance(text, str) and len(text) > 0
 
 
-def test_readiness_properties_and_missing_model_transcribe(tmp_path, capsys):
+def test_readiness_properties_and_missing_model_transcribe(tmp_path, capsys, monkeypatch):
     """has_local_model, is_ready, reload_local_model, and missing-model transcribe log."""
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     rec = SpeechRecognizer(model_dir=str(tmp_path), mock_mode=False)
     assert rec.model_dir == tmp_path
     assert rec.has_local_model is False
@@ -233,3 +234,39 @@ def test_download_parakeet_model_cancel_cleans_up(tmp_path):
             download_parakeet_model(dest, cancel_event=cancel)
 
     assert not dest.exists()
+
+
+def test_cloud_fallback_when_local_missing_or_empty(tmp_path, monkeypatch, capsys):
+    """Falls back to OpenRouter cloud STT with google/gemini-2.5-flash when local is missing or returns ''."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test-cloud-key")
+
+    t = np.linspace(0, 0.5, 8000, endpoint=False, dtype=np.float32)
+    audio = (0.05 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
+
+    fake_resp = Mock()
+    fake_resp.json.return_value = {"text": '  "Open Calculator."  '}
+    fake_resp.raise_for_status.return_value = None
+
+    # Case 1: local recognizer is None
+    rec = SpeechRecognizer(model_dir=str(tmp_path), mock_mode=False)
+    assert rec._recognizer is None
+    with patch("requests.post", return_value=fake_resp) as mock_post:
+        result = rec.transcribe(audio, sample_rate=16000)
+
+    assert result == "open calculator"
+    assert mock_post.call_args.kwargs["data"]["model"] == "google/gemini-2.5-flash"
+    captured = capsys.readouterr().out
+    assert "[STT CLOUD]:" in captured
+
+    # Case 2: local recognizer returns empty string
+    mock_local = Mock()
+    mock_stream = Mock()
+    mock_stream.result.text = ""
+    mock_local.create_stream.return_value = mock_stream
+    rec._recognizer = mock_local
+
+    with patch("requests.post", return_value=fake_resp) as mock_post2:
+        result2 = rec.transcribe(audio, sample_rate=16000)
+
+    assert result2 == "open calculator"
+    mock_post2.assert_called_once()
