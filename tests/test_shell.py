@@ -181,3 +181,81 @@ def test_save_settings_keeps_local_endpoint_keyless(shell, monkeypatch):
     shell._save_settings()
     shell.root.update()
     assert fake_daemon.vision.mock_mode is True
+
+
+def test_offline_model_status_missing_and_ready(shell):
+    """Settings displays missing vs ready status based on recognizer.has_local_model."""
+    fake_rec = SimpleNamespace(has_local_model=False)
+    shell.daemon = SimpleNamespace(recognizer=fake_rec)
+    shell._expand()
+    shell._show_tab("Settings")
+    shell.root.update()
+
+    assert "Not downloaded" in shell.offline_model_status.cget("text")
+    assert shell.offline_model_btn.cget("text") == "Download Model"
+
+    fake_rec.has_local_model = True
+    shell._refresh_offline_model_ui()
+    shell.root.update()
+    assert "Ready" in shell.offline_model_status.cget("text")
+
+
+def test_offline_model_download_button_triggers_and_resets(shell):
+    """Clicking Download Model invokes daemon.download_offline_model and resets cleanly."""
+    import threading
+    import time
+
+    started = threading.Event()
+    proceed = threading.Event()
+    fake_rec = SimpleNamespace(has_local_model=False)
+
+    def _fake_download(progress_cb=None):
+        started.set()
+        if progress_cb:
+            progress_cb(50 * 1024 * 1024, 100 * 1024 * 1024, "Downloading...")
+        proceed.wait(timeout=2)
+        fake_rec.has_local_model = True
+        return True
+
+    shell.daemon = SimpleNamespace(
+        recognizer=fake_rec,
+        download_offline_model=_fake_download,
+        cancel_model_download=lambda: proceed.set(),
+    )
+    shell._expand()
+    shell._show_tab("Settings")
+    shell.root.update()
+
+    shell.offline_model_btn.invoke()
+    assert started.wait(timeout=2)
+    shell.root.update()
+    assert shell._model_downloading is True
+    assert shell.offline_model_btn.cget("text") == "Cancel"
+
+    proceed.set()
+    deadline = time.time() + 2.0
+    while shell._model_downloading and time.time() < deadline:
+        shell._drain_ui_queue()
+        shell.root.update()
+        time.sleep(0.02)
+
+    assert shell._model_downloading is False
+    assert shell.offline_model_btn.cget("text") == "Download Model"
+    assert "Ready" in shell.offline_model_status.cget("text")
+
+
+def test_offline_model_theme_switching_no_clipping(shell):
+    """Dark and Light M3 theme switching updates offline model controls cleanly."""
+    shell.daemon = SimpleNamespace(recognizer=SimpleNamespace(has_local_model=False))
+    shell._expand()
+    shell._show_tab("Settings")
+    shell.root.update()
+
+    for mode in ("light", "dark"):
+        shell.set_theme(mode)
+        shell.root.update()
+        assert shell.offline_model_status.winfo_reqwidth() > 0
+        assert shell.offline_model_btn.winfo_reqwidth() > 0
+        assert shell.offline_model_status.cget("fg") == (
+            shell.theme.success if shell._has_local_model() else shell.theme.on_surface_variant
+        )
