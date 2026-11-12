@@ -4,9 +4,10 @@ Clicking an element the OS names ("Zaid hossain" profile button) beats asking a 
 model to find pixels, which miscounts ordinals like "the fifth profile".
 """
 
+import threading
 import time
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 try:
     import uiautomation as auto
@@ -35,15 +36,23 @@ class Element:
         return (self.rect[0] + self.rect[2]) // 2, (self.rect[1] + self.rect[3]) // 2
 
 
-def list_elements(hwnd: int) -> List[Element]:
+def list_elements(hwnd: int, cancel_event: Optional[threading.Event] = None) -> List[Element]:
     """Named, visible, clickable elements of one window, in reading order (top-left first)."""
     if auto is None or not hwnd:
         return []
+    out: List[Element] = []
     for attempt in (1, 2):  # a busy app (Chrome mid-load) can throw a transient COM error
+        if cancel_event is not None and cancel_event.is_set():
+            return []
         out = _walk(hwnd)
         if out:
             break
-        time.sleep(0.3)
+        if attempt == 1:
+            if cancel_event is not None:
+                if cancel_event.wait(0.3):
+                    return []
+            else:
+                time.sleep(0.3)
     # Row-major order (rows bucketed by 20px) so "fifth" means what a person would count
     out.sort(key=lambda e: (e.rect[1] // 20, e.rect[0]))
     return out
