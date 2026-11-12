@@ -63,5 +63,7 @@ release_dist/
 # Frontend & Rust / Tauri v2
 ui/node_modules/
 ui/dist/
+ui/*.tsbuildinfo
 !ui/src/lib/**
 src-tauri/target/
+src-tauri/gen/
