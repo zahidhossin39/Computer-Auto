@@ -123,7 +123,7 @@ def build_frontend() -> Path:
 def build_tauri() -> tuple[Path | None, Path]:
     """Build the Rust + Tauri v2 application and NSIS Windows Installer."""
     npx = _resolve_tool("npx")
-    cmd = [npx, "--prefix", str(UI_DIR), "tauri", "build", "--bundles", "nsis"]
+    cmd = [npx, "--yes", "@tauri-apps/cli@^2", "build", "--bundles", "nsis"]
     print("Building Tauri v2 + NSIS installer:")
     print(" ", " ".join(cmd))
     subprocess.run(cmd, cwd=str(ROOT_DIR), check=True)
