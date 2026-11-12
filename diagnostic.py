@@ -23,8 +23,6 @@ if sys.platform == "win32":
         pass
 
 import argparse
-import threading
-import time
 
 if sys.platform == "win32":
     try:
@@ -43,11 +41,8 @@ except Exception:
     pass
 
 from main import ComputerAutoDaemon
-from src.trigger.hotkey import GlobalHotkeyListener
-from src.ui.shell import AppShell
-from src.stt.engine import SpeechRecognizer
+from src.config import load_settings
 from src.vision.capture import ScreenCapture
-from src.vision.agent import VisionAgent
 
 
 def run_subsystem_checks():
@@ -85,12 +80,24 @@ def run_subsystem_checks():
     else:
         checks.append(("Parakeet STT INT8", "WARN", f"Missing model weights: {missing}"))
 
-    # 4. OpenRouter API Key (vision agent)
-    gemini_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
-    if gemini_key:
-        checks.append(("OpenRouter API Key", "OK", f"Configured in .env (len: {len(gemini_key)})"))
+    # 4. Vision Endpoint & API Key (OpenRouter or custom OpenAI-compatible endpoint)
+    settings = load_settings()
+    api_base = (settings.get("vision_api_base") or "https://openrouter.ai/api/v1").strip()
+    openrouter_key = (
+        settings.get("openrouter_api_key")
+        or os.environ.get("OPENROUTER_API_KEY", "")
+    ).strip()
+    custom_key = (settings.get("vision_api_key") or "").strip()
+    is_custom_endpoint = api_base.rstrip("/") != "https://openrouter.ai/api/v1"
+
+    if is_custom_endpoint:
+        key_note = "with API key" if (custom_key or openrouter_key) else "no key (local)"
+        checks.append(("Vision Endpoint", "OK", f"Custom endpoint {api_base} ({key_note})"))
+    elif openrouter_key:
+        src_label = "settings.json" if settings.get("openrouter_api_key") else ".env"
+        checks.append(("Vision Endpoint", "OK", f"OpenRouter key configured via {src_label} (len: {len(openrouter_key)})"))
     else:
-        checks.append(("OpenRouter API Key", "WARN", "OPENROUTER_API_KEY not found in .env"))
+        checks.append(("Vision Endpoint", "WARN", "OPENROUTER_API_KEY not found in settings.json or .env"))
 
     # 5. Screen Capture
     try:

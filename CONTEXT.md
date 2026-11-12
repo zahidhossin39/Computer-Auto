@@ -21,7 +21,7 @@ A predefined, deterministic action executed directly via native OS APIs without 
 _Avoid_: Shortcut, command, macro
 
 **Vision Agent**:
-The multimodal agent that perceives the desktop screen through screenshots and executes multi-step GUI actions.
+The multimodal agent (via OpenRouter or a local OpenAI-compatible endpoint) that perceives the desktop screen through screenshots and Windows UI Automation (UIA) Set-of-Marks to execute multi-step GUI actions.
 _Avoid_: Visual LLM, bot, screen reader
 
 **Listening Session**:
@@ -29,7 +29,7 @@ The active period between pressing the hotkey to begin capturing audio and press
 _Avoid_: Recording interval, microphone state
 
 **HUD Pill**:
-The minimal semi-transparent floating widget that displays the current activity status (listening, routing, executing) without stealing focus.
+The minimal always-on-top Material Design 3 floating widget that displays live status (listening, thinking, executing, confirming) without stealing window focus, and shrinks/fades during Vision Agent captures.
 _Avoid_: Overlay, popup, status window, banner
 
 **On-Device STT Engine**:
@@ -44,13 +44,13 @@ _Avoid_: Safety popup, dialog prompt, permission check
 A dedicated physical keypress (Escape) that instantly terminates all active mouse, keyboard, and agent execution threads.
 _Avoid_: Kill switch, abort button, cancel key
 
-**Local Neural TTS Engine**:
-The CPU-optimized offline speech synthesizer converting system feedback and confirmations into spoken audio.
-_Avoid_: Voice generator, voice clone, speech synthesizer
+**Local Voice Feedback (SAPI5 TTS)**:
+The offline Windows SAPI5 (`SAPI.SpVoice`) speech synthesizer converting system feedback and guardrail confirmations into spoken audio without external network requests.
+_Avoid_: Voice generator, voice clone, cloud TTS
 
 **App Shell**:
-The desktop container managing system tray integration, window lifecycle, and HUD presentation.
-_Avoid_: GUI wrapper, main window, electron app
+The Material Design 3 Tkinter desktop shell managing the floating HUD Pill, expandable Command Studio (History, Commands, Settings), and native Win32 system tray integration.
+_Avoid_: GUI wrapper, main window, electron app, tauri app
 
 **Intent Registry**:
 The declarative configuration defining mappings between user voice patterns and deterministic actions.

@@ -140,15 +140,38 @@ class CommandRouter:
                 return _make("focus_window", IntentAction("focus_window", target=str(win[0]), command=win[1]))
             if m.group(1) in SITES:  # "go to youtube": no such window open, so open the site
                 return _make("open_url", IntentAction("open_url", target=SITES[m.group(1)]))
+        m = re.match(r"(?:minimize|minimise|minimized)\s+(.+)$", clean)
+        if m:
+            win = apps.find_window(m.group(1))
+            if win:
+                return _make("minimize_window", IntentAction("minimize_window", target=str(win[0]), command=win[1]))
+        m = re.match(r"(?:maximize|maximise|maximized)\s+(.+)$", clean)
+        if m:
+            win = apps.find_window(m.group(1))
+            if win:
+                return _make("maximize_window", IntentAction("maximize_window", target=str(win[0]), command=win[1]))
+        m = re.match(r"(?:restore|unmaximize|unmaximise)\s+(.+)$", clean)
+        if m:
+            win = apps.find_window(m.group(1))
+            if win:
+                return _make("restore_window", IntentAction("restore_window", target=str(win[0]), command=win[1]))
         m = re.match(r"(?:close|quit|exit)\s+(.+)$", clean)
         if m and m.group(1) not in ("tab", "this tab", "window", "this", "it"):
-            win = apps.find_window(m.group(1))
+            target = m.group(1)
+            win = apps.find_window(target)
             if win:
                 intent = _make("close_window", IntentAction("close_window", target=str(win[0]), command=win[1]))
                 intent.is_destructive = True  # same as "close window": ask before closing
                 return intent
-            # Otherwise Jev reads "close spotify" as "close the active window": never guess here
-            return _make("not_open", IntentAction("say", target=f"{m.group(1)} is not open"))
+            # Only say "<target> is not open" if target is a known installed app;
+            # UI targets like "close popup", "close sidebar", "exit fullscreen" fall through to Vision.
+            try:
+                known_app = apps.find(target, allow_jev=False)
+            except TypeError:
+                known_app = apps.find(target)
+            if known_app:
+                return _make("not_open", IntentAction("say", target=f"{target} is not open"))
+            return None
         m = re.match(r"(?:open|launch|start|run)\s+(.+?)(?:\s+app)?$", clean)
         if m:
             found = apps.find(m.group(1))

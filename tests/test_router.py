@@ -117,11 +117,49 @@ def test_close_an_app_that_is_not_open_does_not_close_the_front_window(router, m
     """Jev mapped "close spotify" to "close the active window"; it must just say so instead."""
     from src import apps
     monkeypatch.setattr(apps, "find_window", lambda name: None)
+    monkeypatch.setattr(apps, "find", lambda name, allow_jev=True: ("Spotify", "Spotify.AppID") if "spotify" in name else None)
     res = router.route("close spotify")
     assert res.intent.action.type == "say"
     monkeypatch.setattr(apps, "find_window", lambda name: (123, "Spotify Premium"))
     res = router.route("switch to spotify")
     assert res.intent.action.type == "focus_window" and res.intent.action.target == "123"
+
+
+def test_close_ui_targets_fall_through_to_vision(router, monkeypatch):
+    """UI targets like 'close popup' or 'exit fullscreen' must fall through to Vision, not say not_open."""
+    from src import apps
+    monkeypatch.setattr(apps, "find_window", lambda name: None)
+    monkeypatch.setattr(apps, "find", lambda name, allow_jev=True: None)
+    for cmd in ("close popup", "close sidebar", "close modal", "close dialog", "close ad", "exit fullscreen"):
+        res = router.route(cmd)
+        assert res.is_vision is True, f"Expected {cmd!r} to fall through to Vision"
+        assert res.intent is None
+
+
+def test_minimize_maximize_restore_app_routing(router, monkeypatch):
+    """minimize/maximize/restore <app> routes deterministically via find_window."""
+    from src import apps
+    monkeypatch.setattr(apps, "find_window", lambda name: (456, "Claude") if "cloud" in name or "chrome" in name or "notepad" in name or "discord" in name else None)
+
+    r_min = router.route("minimize chrome")
+    assert r_min.is_vision is False
+    assert r_min.intent.action.type == "minimize_window"
+    assert r_min.intent.action.target == "456"
+
+    r_typo = router.route("minimized cloud")
+    assert r_typo.is_vision is False
+    assert r_typo.intent.action.type == "minimize_window"
+    assert r_typo.intent.action.target == "456"
+
+    r_max = router.route("maximize notepad")
+    assert r_max.is_vision is False
+    assert r_max.intent.action.type == "maximize_window"
+    assert r_max.intent.action.target == "456"
+
+    r_res = router.route("restore discord")
+    assert r_res.is_vision is False
+    assert r_res.intent.action.type == "restore_window"
+    assert r_res.intent.action.target == "456"
 
 
 def test_press_any_key_combination(router):

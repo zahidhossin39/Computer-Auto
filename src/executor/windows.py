@@ -60,24 +60,60 @@ def type_text(text: str) -> None:
         return
     import win32clipboard
 
-    def swap(new_text):
+    # GDI handle formats (CF_BITMAP, CF_METAFILEPICT, CF_PALETTE, CF_ENHMETAFILE) cannot be
+    # round-tripped as raw bytes via SetClipboardData, so skip them while keeping CF_DIB/text/etc.
+    _SKIP_FORMATS = {2, 3, 9, 14}
+
+    def _save_and_set(new_text: str):
+        saved = []
         win32clipboard.OpenClipboard()
         try:
-            has_text = win32clipboard.IsClipboardFormatAvailable(win32clipboard.CF_UNICODETEXT)
-            old = win32clipboard.GetClipboardData(win32clipboard.CF_UNICODETEXT) if has_text else None
+            enum_fn = getattr(win32clipboard, "EnumClipboardFormats", None)
+            fmt = enum_fn(0) if callable(enum_fn) else 0
+            if isinstance(fmt, int) and fmt != 0:
+                seen = set()
+                while fmt and fmt not in seen and len(seen) < 64:
+                    seen.add(fmt)
+                    if fmt not in _SKIP_FORMATS:
+                        try:
+                            data = win32clipboard.GetClipboardData(fmt)
+                            if isinstance(data, (str, bytes)):
+                                saved.append((fmt, data))
+                        except Exception:
+                            pass
+                    next_fmt = enum_fn(fmt)
+                    fmt = next_fmt if isinstance(next_fmt, int) else 0
+            elif win32clipboard.IsClipboardFormatAvailable(win32clipboard.CF_UNICODETEXT):
+                data = win32clipboard.GetClipboardData(win32clipboard.CF_UNICODETEXT)
+                if isinstance(data, str):
+                    saved.append((win32clipboard.CF_UNICODETEXT, data))
             win32clipboard.EmptyClipboard()
-            if new_text is not None:
-                win32clipboard.SetClipboardText(new_text, win32clipboard.CF_UNICODETEXT)
-            return old
+            win32clipboard.SetClipboardText(new_text, win32clipboard.CF_UNICODETEXT)
+            return saved
         finally:
             win32clipboard.CloseClipboard()
 
-    saved = swap(text)
+    def _restore(saved):
+        win32clipboard.OpenClipboard()
+        try:
+            win32clipboard.EmptyClipboard()
+            for fmt, data in saved:
+                try:
+                    if fmt == win32clipboard.CF_UNICODETEXT and isinstance(data, str):
+                        win32clipboard.SetClipboardText(data, win32clipboard.CF_UNICODETEXT)
+                    else:
+                        win32clipboard.SetClipboardData(fmt, data)
+                except Exception:
+                    pass
+        finally:
+            win32clipboard.CloseClipboard()
+
+    saved = _save_and_set(text)
     try:
         send_hotkey("ctrl", "v")
         time.sleep(0.15)  # let the app read the clipboard before we put the user's text back
     finally:
-        swap(saved)  # ponytail: restores text only; images/files on the clipboard are dropped
+        _restore(saved)
 
 try:
     import win32con
@@ -309,15 +345,56 @@ class WindowsExecutor:
                 type_text(action.target)
             elif action.type == "open_app" and action.target:
                 explorer = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "explorer.exe")
-                return _shell_launch(explorer, f"shell:AppsFolder\\{action.target}")
+                apps_uri = f"shell:AppsFolder\\{action.target}"
+                if _shell_launch(explorer, apps_uri):
+                    return True
+                if hasattr(os, "startfile"):
+                    try:
+                        os.startfile(apps_uri)
+                        return True
+                    except Exception:
+                        pass
+                try:
+                    subprocess.Popen([explorer, apps_uri])
+                    return True
+                except Exception:
+                    return False
             elif action.type == "focus_window" and action.target:
                 return self.focus_window(int(action.target))
+            elif action.type == "minimize_window" and action.target:
+                if win32gui is None or win32con is None:
+                    return False
+                win32gui.ShowWindow(int(action.target), win32con.SW_MINIMIZE)
+            elif action.type == "maximize_window" and action.target:
+                if win32gui is None or win32con is None:
+                    return False
+                win32gui.ShowWindow(int(action.target), win32con.SW_MAXIMIZE)
+            elif action.type == "restore_window" and action.target:
+                if win32gui is None or win32con is None:
+                    return False
+                win32gui.ShowWindow(int(action.target), win32con.SW_RESTORE)
             elif action.type == "close_window" and action.target:
+                if win32gui is None or win32con is None:
+                    return False
                 win32gui.PostMessage(int(action.target), win32con.WM_CLOSE, 0, 0)
             elif action.type == "open_url" and action.target:
                 if not action.target.lower().startswith(("http://", "https://")):
                     return False  # ShellExecute would run a local path or program
-                return _shell_launch(action.target)
+                if _shell_launch(action.target):
+                    return True
+                if hasattr(os, "startfile"):
+                    try:
+                        os.startfile(action.target)
+                        return True
+                    except Exception:
+                        pass
+                try:
+                    import webbrowser
+                    if webbrowser.open(action.target):
+                        return True
+                except Exception:
+                    pass
+                return False
             else:
                 return False
             return True

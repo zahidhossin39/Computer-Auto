@@ -75,8 +75,9 @@ def test_silence_auto_stop_callback():
     recorder.on_silence = on_silence
     recorder.is_recording = True
 
-    # Simulate voice active chunk
+    # Simulate sustained voice active chunks (2 chunks >= 2 consecutive active chunks)
     active_chunk = np.ones((500, 1), dtype=np.float32) * 0.1
+    recorder._audio_callback(active_chunk, 500, None, 0)
     recorder._audio_callback(active_chunk, 500, None, 0)
     assert recorder._speech_detected is True
 
@@ -161,3 +162,52 @@ def test_vad_stops_in_a_noisy_room():
     recorder.feed_audio_chunk(noise)
     time.sleep(0.05)
     assert fired == [1]
+
+
+def test_vad_ignores_single_short_noise_spike():
+    """A single brief (<60ms) mic bump followed by silence must not arm VAD."""
+    import time
+    recorder = AudioRecorder(sample_rate=16000)
+    recorder.is_recording = True
+    recorder._recording_start_time = time.time() - 1.0  # past calibration
+
+    spike = np.ones((320, 1), dtype=np.float32) * 0.1  # 20ms
+    silence = np.zeros((1600, 1), dtype=np.float32)
+    recorder.feed_audio_chunk(spike)
+    assert recorder._speech_detected is False
+    recorder.feed_audio_chunk(silence)
+    assert recorder._speech_detected is False
+    assert recorder._voice_streak_chunks == 0
+
+
+def test_vad_arms_on_two_consecutive_short_chunks():
+    """Two consecutive short active chunks arm VAD."""
+    import time
+    recorder = AudioRecorder(sample_rate=16000)
+    recorder.is_recording = True
+    recorder._recording_start_time = time.time() - 1.0
+
+    chunk = np.ones((320, 1), dtype=np.float32) * 0.05  # 20ms each
+    recorder.feed_audio_chunk(chunk)
+    assert recorder._speech_detected is False
+    recorder.feed_audio_chunk(chunk)
+    assert recorder._speech_detected is True
+
+
+def test_on_level_callback_throttled_and_normalized():
+    """on_level emits normalized 0.0..1.0 values throttled at ~15-20 Hz."""
+    import time
+    levels = []
+    recorder = AudioRecorder(sample_rate=16000)
+    recorder.on_level = levels.append
+    recorder.is_recording = True
+
+    recorder.feed_audio_chunk(np.ones((400, 1), dtype=np.float32) * 0.5)
+    recorder.feed_audio_chunk(np.ones((400, 1), dtype=np.float32) * 0.5)  # throttled
+    assert len(levels) == 1
+    assert 0.0 <= levels[0] <= 1.0
+
+    time.sleep(0.06)
+    recorder.feed_audio_chunk(np.zeros((400, 1), dtype=np.float32))
+    assert len(levels) == 2
+    assert levels[1] == 0.0

@@ -29,11 +29,15 @@ class AudioRecorder:
 
         # Voice Activity Detection (VAD) / Silence Auto-Stop
         self.on_silence: Optional[Callable[[], None]] = None
+        self.on_level: Optional[Callable[[float], None]] = None
         self.enable_vad = True
         self._speech_detected = False
         self._speech_start_time = 0.0
         self._silence_start_time = 0.0
         self._recording_start_time = 0.0
+        self._last_level_time = 0.0
+        self._voice_streak_chunks = 0
+        self._voice_streak_sec = 0.0
         self._noise = None  # learned background (peak, rms), see _process_vad
         self._last_good = None  # (device, rate, channels) that last opened fine
         self.speech_threshold_rms = 0.003
@@ -47,13 +51,23 @@ class AudioRecorder:
 
     def _process_vad(self, chunk: np.ndarray) -> None:
         """Process chunk for voice activity and trigger silence auto-stop."""
-        if not self.enable_vad or not self.is_recording:
+        if not self.is_recording:
             return
-
 
         peak = float(np.max(np.abs(chunk))) if len(chunk) > 0 else 0.0
         rms = float(np.sqrt(np.mean(chunk**2))) if len(chunk) > 0 else 0.0
         now = time.time()
+
+        if self.on_level is not None and (now - self._last_level_time >= 0.05):
+            self._last_level_time = now
+            level = min(1.0, max(0.0, max(rms * 8.0, peak * 2.0)))
+            try:
+                self.on_level(level)
+            except Exception:
+                pass
+
+        if not self.enable_vad:
+            return
 
         # The room's background level: fixed thresholds sat right at this mic's noise (peak
         # ~0.008), so noise started "speech" and "silence" never came - every command ran to
@@ -68,19 +82,26 @@ class AudioRecorder:
 
         if not self._speech_detected:
             if is_voice:
-                self._speech_detected = True
-                self._speech_start_time = now
-                self._silence_start_time = 0.0
-            elif now - self._recording_start_time >= self.initial_silence_timeout:
-                # Nobody spoke yet: keep waiting instead of processing silence. Keep only the
-                # last ~0.5s so the onset of speech isn't clipped, and restart the clock so
-                # max_duration measures the utterance, not the idle wait.
-                keep = int(self.actual_sample_rate * 0.5)
-                with self._lock:
-                    tail = np.concatenate(self._buffer)[-keep:] if self._buffer else None
-                    self._buffer = [tail] if tail is not None else []
-                self._recording_start_time = now
-                return
+                chunk_dur = len(chunk) / max(1, self.actual_sample_rate)
+                self._voice_streak_chunks += 1
+                self._voice_streak_sec += chunk_dur
+                if self._voice_streak_chunks >= 2 or self._voice_streak_sec >= 0.06:
+                    self._speech_detected = True
+                    self._speech_start_time = now
+                    self._silence_start_time = 0.0
+            else:
+                self._voice_streak_chunks = 0
+                self._voice_streak_sec = 0.0
+                if now - self._recording_start_time >= self.initial_silence_timeout:
+                    # Nobody spoke yet: keep waiting instead of processing silence. Keep only the
+                    # last ~0.5s so the onset of speech isn't clipped, and restart the clock so
+                    # max_duration measures the utterance, not the idle wait.
+                    keep = int(self.actual_sample_rate * 0.5)
+                    with self._lock:
+                        tail = np.concatenate(self._buffer)[-keep:] if self._buffer else None
+                        self._buffer = [tail] if tail is not None else []
+                    self._recording_start_time = now
+                    return
         else:
             is_active = (rms > max(self.silence_threshold_rms, noise_rms * 2)
                          or peak > max(self.silence_threshold_peak, noise_peak * 2))
@@ -149,6 +170,9 @@ class AudioRecorder:
         self._speech_detected = False
         self._silence_start_time = 0.0
         self._noise = None
+        self._voice_streak_chunks = 0
+        self._voice_streak_sec = 0.0
+        self._last_level_time = 0.0
         self._recording_start_time = time.time()
         self._generation += 1
 

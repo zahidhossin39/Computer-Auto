@@ -5,10 +5,12 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 import io
 import json
+import math
 import os
 import re
+import threading
 import time
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from PIL import Image
 import pyautogui
 import requests
@@ -90,12 +92,13 @@ def _to_data_url(img: Image.Image) -> str:
 JEV_CLICK_CONFIDENCE = 0.9  # below this the vision model double-checks Jev's pick
 
 
-def _window_box(hwnd: int, size) -> tuple:
-    """Screen rect of the target window clipped to the screenshot, or the full screen."""
+def _window_box(hwnd: int, size, origin: Tuple[int, int] = (0, 0)) -> tuple:
+    """Screenshot-local rect of the target window clipped to the image, or the full image."""
     try:
         import win32gui
         left, top, right, bottom = win32gui.GetWindowRect(hwnd)
-        box = (max(0, left), max(0, top), min(size[0], right), min(size[1], bottom))
+        ox, oy = origin
+        box = (max(0, left - ox), max(0, top - oy), min(size[0], right - ox), min(size[1], bottom - oy))
         if box[2] - box[0] > 50 and box[3] - box[1] > 50:
             return box
     except Exception:
@@ -103,21 +106,60 @@ def _window_box(hwnd: int, size) -> tuple:
     return (0, 0, size[0], size[1])
 
 
-def _inside(rect, box) -> bool:
-    cx, cy = (rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2
+def _inside(rect, box, origin: Tuple[int, int] = (0, 0)) -> bool:
+    cx = (rect[0] + rect[2]) // 2 - origin[0]
+    cy = (rect[1] + rect[3]) // 2 - origin[1]
     return box[0] <= cx < box[2] and box[1] <= cy < box[3]
 
 
-def _draw_marks(img: Image.Image, elements, box) -> Image.Image:
+def _overlap_area(a: Tuple[int, int, int, int], b: Tuple[int, int, int, int]) -> int:
+    iw = min(a[2], b[2]) - max(a[0], b[0])
+    ih = min(a[3], b[3]) - max(a[1], b[1])
+    return iw * ih if iw > 0 and ih > 0 else 0
+
+
+def _draw_marks(img: Image.Image, elements, box, origin: Tuple[int, int] = (0, 0)) -> Image.Image:
     """Set-of-marks: numbered red boxes so the model answers with a number, not pixels."""
     from PIL import ImageDraw
     img = img.convert("RGB")
     draw = ImageDraw.Draw(img)
+    ox, oy = origin
+    w, h = img.size
+    placed_tags: List[Tuple[int, int, int, int]] = []
     for i, e in enumerate(elements, 1):
-        l, t, r, b = (e.rect[0] - box[0], e.rect[1] - box[1], e.rect[2] - box[0], e.rect[3] - box[1])
+        l = e.rect[0] - ox - box[0]
+        t = e.rect[1] - oy - box[1]
+        r = e.rect[2] - ox - box[0]
+        b = e.rect[3] - oy - box[1]
         draw.rectangle((l, t, r, b), outline=(255, 0, 0), width=2)
-        draw.rectangle((l, t, l + 8 + 7 * len(str(i)), t + 14), fill=(255, 0, 0))
-        draw.text((l + 3, t + 1), str(i), fill=(255, 255, 255))
+
+        label = str(i)
+        tw, th = 8 + 7 * len(label), 14
+        candidates = [
+            (l, t),
+            (r - tw, t),
+            (l, t - th),
+            (l, b - th),
+            (r - tw, b - th),
+        ]
+        best_rect = None
+        best_overlap = None
+        for cx, cy in candidates:
+            cl = max(0, min(w - tw, cx))
+            ct = max(0, min(h - th, cy))
+            cand = (cl, ct, cl + tw, ct + th)
+            ov = sum(_overlap_area(cand, prev) for prev in placed_tags)
+            if ov == 0:
+                best_rect = cand
+                break
+            if best_overlap is None or ov < best_overlap:
+                best_overlap = ov
+                best_rect = cand
+
+        tl, tt, tr, tb = best_rect  # type: ignore[misc]
+        placed_tags.append((tl, tt, tr, tb))
+        draw.rectangle((tl, tt, tr, tb), fill=(220, 20, 20), outline=(0, 0, 0))
+        draw.text((tl + 3, tt + 1), label, fill=(255, 255, 255))
     return img
 
 
@@ -151,10 +193,16 @@ class VisionAgent:
         self.api_base = api_base.rstrip("/")  # OpenAI-compatible: OpenRouter, OpenAI, LM Studio...
         self.api_key = api_key or os.environ.get("OPENROUTER_API_KEY")
         self.model_name = model_name
-        self.mock_mode = mock_mode or not self.api_key
+        self.mock_mode = mock_mode or (not self.api_key and "openrouter.ai" in self.api_base)
         self.guardrail = SafetyGuardrail()
 
-    def _ask(self, image_url: str, text: str, system: str = "") -> dict:
+    def _ask(
+        self,
+        image_url: str,
+        text: str,
+        system: str = "",
+        cancel_event: Optional[threading.Event] = None,
+    ) -> dict:
         messages = [{"role": "system", "content": system}] if system else []
         messages.append({"role": "user", "content": [
             {"type": "image_url", "image_url": {"url": image_url}},
@@ -165,48 +213,72 @@ class VisionAgent:
             # If the provider is busy, OpenRouter tries these instead of failing the task
             body["models"] = [self.model_name] + [m for m in FALLBACK_MODELS if m != self.model_name]
             body["provider"] = {"sort": "latency"}  # measured: qwen 0.7s steady vs 0.9-2.0s
+        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
         last = None
         for attempt in range(3):
-            r = _session.post(self.api_base + "/chat/completions", headers={"Authorization": f"Bearer {self.api_key}"},
+            if cancel_event is not None and cancel_event.is_set():
+                raise RuntimeError("vision request cancelled")
+            r = _session.post(self.api_base + "/chat/completions", headers=headers,
                               json=body, timeout=60)
             if r.status_code == 200:
                 return _parse_json(r.json()["choices"][0]["message"]["content"])
             last = f"{r.status_code} {r.text[:120]}"
             if r.status_code not in (429, 500, 502, 503, 529):  # not worth retrying
                 break
-            wait = float(r.headers.get("retry-after") or 2 * (attempt + 1))
+            wait = min(float(r.headers.get("retry-after") or 2 * (attempt + 1)), 8.0)
             print(f"[VISION]: {r.status_code} from the model, retrying in {wait:.0f}s")
-            time.sleep(min(wait, 8))
+            remaining = wait
+            while remaining > 0:
+                if cancel_event is not None and cancel_event.is_set():
+                    raise RuntimeError("vision request cancelled")
+                step = min(0.1, remaining)
+                time.sleep(step)
+                remaining -= step
         raise RuntimeError(f"vision model unavailable after retries: {last}")
 
     def plan_action(
-        self, user_command: str, screenshot: Image.Image, history: Optional[List[str]] = None,
+        self,
+        user_command: str,
+        screenshot: Image.Image,
+        history: Optional[List[str]] = None,
         hwnd: int = 0,
+        origin: Tuple[int, int] = (0, 0),
+        cancel_event: Optional[threading.Event] = None,
     ) -> VisionAction:
         """Ask the model for the next single action toward the user's request."""
+        if cancel_event is not None and cancel_event.is_set():
+            return VisionAction(action="none", explanation="Cancelled")
+
         if self.mock_mode:
             return VisionAction(
                 action="click",
-                x=screenshot.width // 2,
-                y=screenshot.height // 2,
+                x=origin[0] + screenshot.width // 2,
+                y=origin[1] + screenshot.height // 2,
                 explanation="Mock center click",
             )
 
         # Work on the target window only: sharper image, fewer distractions, and the
         # OS tells us its elements by name so clicks land on exact rects.
-        box = _window_box(hwnd, screenshot.size)
+        box = _window_box(hwnd, screenshot.size, origin=origin)
         crop = screenshot.crop(box)
-        elements = [e for e in uia.list_elements(hwnd) if _inside(e.rect, box)]
+        raw_elements = (
+            uia.list_elements(hwnd, cancel_event=cancel_event)
+            if cancel_event is not None
+            else uia.list_elements(hwnd)
+        )
+        elements = [e for e in raw_elements if _inside(e.rect, box, origin=origin)]
         listing = "\n".join(f"[{i}] {e.kind} '{e.name}'" for i, e in enumerate(elements, 1))
 
-        image = _to_data_url(_draw_marks(crop, elements, box))
+        image = _to_data_url(_draw_marks(crop, elements, box, origin=origin))
         steps = "\n".join(f"{i}. {h}" for i, h in enumerate(history or [], 1)) or "(none yet)"
         prompt = (f"User Request: {user_command}\nSteps already taken:\n{steps}\n"
                   f"Marked elements:\n{listing or '(none)'}")
 
         # Race: the vision model starts now; if Jev meanwhile finds one obvious click, that
         # wins and the model's answer is simply dropped (saves Jev's ~0.7s when it says none).
-        planned = _pool.submit(self._plan, image, prompt, elements, crop.size, box)
+        planned = _pool.submit(
+            self._plan, image, prompt, elements, crop.size, box, origin, cancel_event
+        )
         # Fast path: one obvious click on a named element needs no vision result at all.
         if not history and elements:
             picked = jev.choose(
@@ -216,21 +288,32 @@ class VisionAgent:
                 {**{str(i): f"{e.kind} '{e.name}'" for i, e in enumerate(elements, 1)},
                  "none": "No single click completes the command"},
             )
+            if cancel_event is not None and cancel_event.is_set():
+                return VisionAction(action="none", explanation="Cancelled")
             if picked and picked[0] != "none" and picked[1] >= JEV_CLICK_CONFIDENCE:
                 e = elements[int(picked[0]) - 1]
                 return VisionAction("click", *e.center, final=True, explanation=f"Click {e.kind} '{e.name}'")
 
         return planned.result()
 
-    def _plan(self, image: str, prompt: str, elements, crop_size, box) -> VisionAction:
+    def _plan(
+        self,
+        image: str,
+        prompt: str,
+        elements,
+        crop_size,
+        box,
+        origin: Tuple[int, int] = (0, 0),
+        cancel_event: Optional[threading.Event] = None,
+    ) -> VisionAction:
         try:
-            data = self._ask(image, prompt, SYSTEM_PROMPT)
+            data = self._ask(image, prompt, SYSTEM_PROMPT, cancel_event=cancel_event)
             if data.get("action") in ("click", "double_click", "right_click") and not (
                     data.get("element") or data.get("target")):
                 # A click with nothing to click wastes a whole step; ask once more, plainly.
                 nudge = ('\n\nYour last answer was a click with no element and no target. '
                          'Answer again with "element": <number>.')
-                data = self._ask(image, prompt + nudge, SYSTEM_PROMPT)
+                data = self._ask(image, prompt + nudge, SYSTEM_PROMPT, cancel_event=cancel_event)
             x = y = None
             n = data.get("element")
             act = data.get("action")
@@ -243,8 +326,8 @@ class VisionAgent:
                 if field:
                     x, y = field.center
             elif act in ("click", "double_click", "right_click") and data.get("target"):
-                x, y = self._locate(data["target"], image, crop_size)
-                x, y = x + box[0], y + box[1]  # crop -> screen coordinates
+                x, y = self._locate(data["target"], image, crop_size, cancel_event=cancel_event)
+                x, y = x + box[0] + origin[0], y + box[1] + origin[1]  # crop -> global screen coordinates
             return VisionAction(
                 action=data.get("action", "none"),
                 x=x,
@@ -259,12 +342,34 @@ class VisionAgent:
         except Exception as e:
             return VisionAction(action="none", explanation=f"Vision API error: {e}")
 
-    def _locate(self, target: str, image_url: str, size) -> tuple:
+    def _locate(
+        self,
+        target: str,
+        image_url: str,
+        size,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> tuple:
         """Second call: pure grounding. Asking the planner for coordinates directly was
         inaccurate; a dedicated "find this element" call measured 3/3 on the taskbar."""
-        d = self._ask(image_url, 'Return only JSON {"x": int, "y": int}: the center of '
-                                 f"{target}, with coordinates normalized to 0-1000 over the image.")
-        return round(d["x"] * size[0] / 1000), round(d["y"] * size[1] / 1000)
+        d = self._ask(
+            image_url,
+            'Return only JSON {"x": int, "y": int}: the center of '
+            f"{target}, with coordinates normalized to 0-1000 over the image.",
+            cancel_event=cancel_event,
+        )
+        raw_x, raw_y = d.get("x"), d.get("y")
+        if (
+            isinstance(raw_x, bool)
+            or isinstance(raw_y, bool)
+            or not isinstance(raw_x, (int, float))
+            or not isinstance(raw_y, (int, float))
+            or not math.isfinite(raw_x)
+            or not math.isfinite(raw_y)
+        ):
+            raise ValueError(f"invalid coordinates from _locate: {d!r}")
+        nx = max(0.0, min(1000.0, float(raw_x)))
+        ny = max(0.0, min(1000.0, float(raw_y)))
+        return round(nx * size[0] / 1000), round(ny * size[1] / 1000)
 
     def execute_action(self, action: VisionAction) -> bool:
         """Execute the planned visual action via PyAutoGUI."""
