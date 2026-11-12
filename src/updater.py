@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
-APP_VERSION = "1.0.0"
+APP_VERSION = "2.0.0"
 GITHUB_REPO = "zahidhossin39/Computer-Auto"
 
 
@@ -59,13 +59,22 @@ def check_for_update(
         return None
 
     assets = data.get("assets", []) or []
-    exe_url = ""
+    installer_url = ""
+    fallback_exe_url = ""
     for asset in assets:
         name = str(asset.get("name", "")).lower()
-        if name.endswith(".exe"):
-            exe_url = str(asset.get("browser_download_url", ""))
+        if not name.endswith(".exe"):
+            continue
+        asset_url = str(asset.get("browser_download_url", ""))
+        if not asset_url:
+            continue
+        if "setup" in name or "installer" in name:
+            installer_url = asset_url
             break
+        if not fallback_exe_url:
+            fallback_exe_url = asset_url
 
+    exe_url = installer_url or fallback_exe_url
     if not exe_url:
         return None
 
@@ -113,13 +122,20 @@ def download_update(
 
 
 def apply_windows_exe_update(new_exe_path: Path, current_exe_path: Optional[Path] = None) -> bool:
-    """Schedule replacement of the running frozen .exe and relaunch it.
+    """Schedule replacement of the running frozen .exe or launch a Windows Setup installer.
 
-    Returns True if a self-replace script was launched (caller should exit),
+    Returns True if an update process was launched (caller should exit),
     or False when running from Python source (not frozen).
     """
     if not getattr(sys, "frozen", False):
         return False
+
+    new_exe = Path(new_exe_path)
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    lower_name = new_exe.name.lower()
+    if "setup" in lower_name or "installer" in lower_name:
+        subprocess.Popen([str(new_exe), "/S"], creationflags=creationflags)
+        return True
 
     exe_path = Path(current_exe_path or sys.executable).resolve()
     pid = os.getpid()
@@ -132,11 +148,10 @@ def apply_windows_exe_update(new_exe_path: Path, current_exe_path: Optional[Path
         "  timeout /t 1 /nobreak >NUL\n"
         "  goto wait_loop\n"
         ")\n"
-        f"move /Y \"{new_exe_path}\" \"{exe_path}\" >NUL\n"
+        f"move /Y \"{new_exe}\" \"{exe_path}\" >NUL\n"
         f"start \"\" \"{exe_path}\"\n"
         "del \"%~f0\"\n"
     )
     bat_path.write_text(script, encoding="utf-8")
-    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     subprocess.Popen(["cmd", "/c", str(bat_path)], creationflags=creationflags)
     return True

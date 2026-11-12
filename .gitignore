@@ -56,4 +56,11 @@ settings.json
 # Release & Packaging Artifacts
 release_dist/
 *.exe
+*.msi
+*-setup.exe
 *.zip
+
+# Frontend & Rust / Tauri v2
+ui/node_modules/
+ui/dist/
+src-tauri/target/
