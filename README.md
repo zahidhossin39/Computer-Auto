@@ -23,9 +23,9 @@ Computer-Auto runs as a lightweight, always-on-top **floating pill** that never 
 
 - **Compact Pill**: Shows live state (Ready, Listening, Thinking, Working, Confirming), audio level feedback, mic toggle, and a quick-expand button. During Vision Agent screenshots, the pill automatically shrinks and fades out of the way.
 - **Expandable Command Studio**:
-  - **History**: Live command log, typed command input (test without a mic), and inline Confirm/Cancel buttons for guardrails.
-  - **Commands**: Searchable catalog of Tier 1 voice triggers from `intents.yaml`.
-  - **Settings**: Configure your OpenRouter API key, Vision model or custom local endpoint URL, voice engine, microphone device, Dark/Light Material Design 3 theme, and minimize-to-tray behavior.
+  - **Studio**: Live command log, audio level meter, typed command input (test without a mic), and inline Confirm/Cancel buttons for guardrails.
+  - **Commands**: Searchable catalog of Tier 1 voice triggers from `intents.yaml` (including window controls like `minimize`, `maximize`, `restore`, `snap`, app launching, media, and dictation).
+  - **Settings**: Configure your OpenRouter API key, Vision model or custom local endpoint URL (Ollama, LM Studio, vLLM — keyless supported), 1-click offline Parakeet STT **Download Model**, voice engine, microphone device, Dark/Light Material Design 3 theme, and minimize-to-tray behavior.
 - **System Tray**: Native Win32 tray icon for quick show/hide, listening toggle, and clean exit.
 
 ---
@@ -35,9 +35,11 @@ Computer-Auto runs as a lightweight, always-on-top **floating pill** that never 
 ### Option A: Pre-Built Windows Portable Release
 
 1. Download and extract the `Computer-Auto-Windows-Portable.zip` archive from Releases.
-2. *(Optional, for offline voice recognition)* Run `python scripts/download_models.py` (or place the `parakeet-tdt-0.6b-int8` folder inside `models/` next to `Computer-Auto.exe`).
-3. Launch **`Computer-Auto.exe`**.
-4. Open the **Settings** tab in the Command Studio to pick your microphone and enter your OpenRouter API key (or point **Vision API Base** to a local OpenAI-compatible server).
+2. Launch **`Computer-Auto.exe`** (no Python installation required).
+3. Open **`Settings` -> `VOICE & ROUTING`** in the Command Studio:
+   - Click **`Download Model`** for **1-click offline voice recognition** (~400 MB Parakeet INT8, zero terminal setup required) — or switch **Voice Engine** to a Cloud STT model. *(Alternatively, CLI users can run `python scripts/download_models.py`.)*
+   - Pick your microphone from the audio device dropdown.
+4. Enter your OpenRouter API key in **Settings** (or point **Vision API Base** to a local OpenAI-compatible server like `http://localhost:11434/v1`, which works keyless) and click **`Save Settings`**.
 
 ### Option B: Running from Source
 
@@ -75,8 +77,8 @@ Computer-Auto runs as a lightweight, always-on-top **floating pill** that never 
 
 ## Troubleshooting
 
-- **Microphone not picking up voice / "too short or too quiet"**: Open **Settings** and select your active microphone from the audio device dropdown, then click **Save**.
-- **Parakeet STT model not found**: Run `python scripts/download_models.py` and verify `models/parakeet-tdt-0.6b-int8/` contains `encoder.int8.onnx`, `decoder.int8.onnx`, `joiner.int8.onnx`, and `tokens.txt`.
+- **Microphone not picking up voice / "too short or too quiet"**: Open **Settings** and select your active microphone from the audio device dropdown, then click **Save Settings**.
+- **Parakeet STT model not found**: Open **`Settings` -> `VOICE & ROUTING`** and click **`Download Model`** (or run `python scripts/download_models.py` from source) to install `models/parakeet-tdt-0.6b-int8/` (`encoder.int8.onnx`, `decoder.int8.onnx`, `joiner.int8.onnx`, `tokens.txt`), or choose a Cloud STT engine.
 - **Vision commands failing (401 / 429)**: Verify your `OPENROUTER_API_KEY` in Settings (or `.env`), or switch to a fallback model / local OpenAI-compatible endpoint.
 - **Runaway automation**: Press **`Esc`** at any time to trigger the Panic Key and abort immediately.
 - **Quick system health check**: Run `python -u diagnostic.py --check-only` to verify hotkeys, audio input devices, ONNX models, API key, screen capture, and SAPI5 TTS.

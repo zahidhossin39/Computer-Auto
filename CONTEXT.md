@@ -49,7 +49,7 @@ The offline Windows SAPI5 (`SAPI.SpVoice`) speech synthesizer converting system 
 _Avoid_: Voice generator, voice clone, cloud TTS
 
 **App Shell**:
-The Material Design 3 Tkinter desktop shell managing the floating HUD Pill, expandable Command Studio (History, Commands, Settings), and native Win32 system tray integration.
+The Material Design 3 Tkinter desktop shell managing the floating HUD Pill, expandable Command Studio (Studio, Commands, Settings), and native Win32 system tray integration.
 _Avoid_: GUI wrapper, main window, electron app, tauri app
 
 **Intent Registry**:
