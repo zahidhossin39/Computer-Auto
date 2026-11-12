@@ -235,15 +235,23 @@ fn write_settings_file(path: &Path, settings: &AppSettings) -> Result<(), String
     fs::write(path, serialized).map_err(|e| format!("Write error: {e}"))
 }
 
-pub fn save_settings_to_disk(patch: &Value, current: &mut AppSettings) -> Result<(), String> {
+pub fn apply_settings_patch(patch: &Value, current: &mut AppSettings) {
     if let Some(obj) = patch.as_object() {
         if let Some(v) = obj.get("vision_model").and_then(|v| v.as_str()) {
             current.vision_model = v.to_string();
         }
-        if let Some(v) = obj.get("vision_api_base").and_then(|v| v.as_str()) {
+        if let Some(v) = obj
+            .get("vision_api_base")
+            .or_else(|| obj.get("base_url"))
+            .and_then(|v| v.as_str())
+        {
             current.vision_api_base = v.to_string();
         }
-        if let Some(v) = obj.get("vision_api_key").and_then(|v| v.as_str()) {
+        if let Some(v) = obj
+            .get("vision_api_key")
+            .or_else(|| obj.get("openrouter_api_key"))
+            .and_then(|v| v.as_str())
+        {
             let trimmed = v.trim();
             if !trimmed.is_empty() && !trimmed.contains("...") {
                 current.vision_api_key = trimmed.to_string();
@@ -266,7 +274,16 @@ pub fn save_settings_to_disk(patch: &Value, current: &mut AppSettings) -> Result
         }
     }
     current.migrate();
-    write_settings_file(&appdata_settings_path(), current)
+}
+
+pub fn save_settings_to_disk(patch: &Value, current: &mut AppSettings) -> Result<(), String> {
+    apply_settings_patch(patch, current);
+    write_settings_file(&appdata_settings_path(), current)?;
+    let repo_settings = PathBuf::from(r"D:\Vibe-coding\Computer-Auto\settings.json");
+    if repo_settings.exists() {
+        let _ = write_settings_file(&repo_settings, current);
+    }
+    Ok(())
 }
 
 pub fn locate_bridge_root() -> Option<PathBuf> {
@@ -965,5 +982,17 @@ OPENROUTER_API_KEY="sk-or-v1-test123456"
         assert_eq!(map_app_alias("Calculator"), Some("calc.exe"));
         assert_eq!(map_app_alias("Notepad"), Some("notepad.exe"));
         assert_eq!(map_app_alias("unknown-app"), None);
+    }
+
+    #[test]
+    fn test_save_settings_accepts_frontend_aliases() {
+        let mut s = AppSettings::default();
+        let patch = json!({
+            "base_url": "https://example.com/v1",
+            "openrouter_api_key": "sk-or-v1-newkey123456"
+        });
+        apply_settings_patch(&patch, &mut s);
+        assert_eq!(s.vision_api_base, "https://example.com/v1");
+        assert_eq!(s.vision_api_key, "sk-or-v1-newkey123456");
     }
 }

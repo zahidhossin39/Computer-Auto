@@ -44,7 +44,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [apiKey, setApiKey] = useState("");
   const [showKey, setShowKey] = useState(false);
   const [baseUrl, setBaseUrl] = useState(
-    settings.base_url || "https://openrouter.ai/api/v1"
+    settings.vision_api_base ||
+      settings.base_url ||
+      "https://openrouter.ai/api/v1"
   );
   const [visionModel, setVisionModel] = useState(
     settings.vision_model || "google/gemini-2.5-flash"
@@ -59,7 +61,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [toast, setToast] = useState<string | null>(null);
 
   useEffect(() => {
-    setBaseUrl(settings.base_url || "https://openrouter.ai/api/v1");
+    setBaseUrl(
+      settings.vision_api_base ||
+        settings.base_url ||
+        "https://openrouter.ai/api/v1"
+    );
     setVisionModel(settings.vision_model || "google/gemini-2.5-flash");
     setMaxSteps(settings.max_vision_steps || 8);
     setSttEngine(settings.stt_engine || "parakeet");
@@ -72,7 +78,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setSaving(true);
     try {
       const payload: Partial<AppSettings> = {
-        base_url: baseUrl.trim() || "https://openrouter.ai/api/v1",
+        vision_api_base: baseUrl.trim() || "https://openrouter.ai/api/v1",
         vision_model: visionModel,
         max_vision_steps: maxSteps,
         stt_engine: sttEngine,
@@ -80,6 +86,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         use_jev: useJev,
       };
       if (apiKey.trim()) {
+        payload.vision_api_key = apiKey.trim();
         payload.openrouter_api_key = apiKey.trim();
       }
       await onSaveSettings(payload);
