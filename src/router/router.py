@@ -12,6 +12,20 @@ MAX_EXTRA_WORDS = 2
 # Below this, a Jev intent guess is not trusted and the command goes to vision.
 JEV_MIN_CONFIDENCE = 0.8
 
+POLITE_PREFIX_RE = re.compile(
+    r"^(?:(?:please|okay|ok|hey|computer|nova|can you|could you|would you|will you|"
+    r"i want to|i want you to|id like to|go ahead and|just)\s+)+",
+    re.I,
+)
+# Words in trigger containment remainder that indicate a specific argument/slot rather than filler
+SLOT_REMAINDER_WORDS = {
+    "profile", "profiles", "gmail", "gmails", "email", "emails", "inbox", "account", "accounts",
+    "number", "first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth",
+    "1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th", "9th", "10th",
+    "1", "2", "3", "4", "5", "6", "7", "8", "9", "10",
+    "already", "opened", "work", "business", "search", "type", "write", "dictate",
+}
+
 
 @dataclass
 class RouteResult:
@@ -40,6 +54,10 @@ class CommandRouter:
         cleaned = re.sub(r"\b(?:not pet|not bad|note bad|not pad)\b", "notepad", cleaned)
         cleaned = re.sub(r"\b(?:minima's|minimas|minimise|minimised)\b", "minimize", cleaned)
         cleaned = re.sub(r"\b(?:cloud code|cloud)\b", "claude", cleaned)
+        cleaned = re.sub(r"\b(?:upset)\b", "website", cleaned)
+        cleaned = re.sub(r"\b(?:g mail|gee mail|ji mail|jemail)\b", "gmail", cleaned)
+        cleaned = re.sub(r"\b(?:pro file|profyle)\b", "profile", cleaned)
+        cleaned = re.sub(r"\b(?:numba|nmbr)\b", "number", cleaned)
         # Drop articles so "open the browser" matches the "open browser" trigger
         return " ".join(w for w in cleaned.split() if w not in ("the", "a", "an"))
 
@@ -58,51 +76,57 @@ class CommandRouter:
         if not clean_text:
             return RouteResult(is_vision=False, command="", intent=None)
 
-        # 1. Exact match
+        polite_clean = POLITE_PREFIX_RE.sub("", clean_text).strip() or clean_text
+
+        # 1. Exact match (raw normalized or after stripping leading polite filler like "please")
         if clean_text in self._trigger_map:
             return RouteResult(
                 is_vision=False,
                 command=utterance.strip(),
                 intent=self._trigger_map[clean_text],
             )
+        if polite_clean in self._trigger_map:
+            return RouteResult(
+                is_vision=False,
+                command=utterance.strip(),
+                intent=self._trigger_map[polite_clean],
+            )
 
-        # 2. Key phrase containment match (ordered by longest trigger first).
+        # 2. Deterministic argument / slot commands: open <profile/gmail>, open <app>, type <text>,
+        #    go to <site>, minimize/maximize/focus <window>. Runs before fuzzy containment so
+        #    "open chrome 3rd profile" or "open chrome already open" is not hijacked by "open chrome".
+        slot = self._slot_intent(utterance.strip(), clean_text)
+        if not slot and polite_clean != clean_text:
+            slot = self._slot_intent(utterance.strip(), polite_clean)
+        if slot:
+            return RouteResult(is_vision=False, command=utterance.strip(), intent=slot)
+
+        # 3. Key phrase containment match (ordered by longest trigger first).
         # Only counts for short utterances: after removing the matched
-        # trigger, at most MAX_EXTRA_WORDS words may remain.
+        # trigger, at most MAX_EXTRA_WORDS words may remain and none may be slot arguments.
         sorted_triggers = sorted(self._trigger_map.keys(), key=len, reverse=True)
         for trigger in sorted_triggers:
             if " " not in trigger:
                 continue  # one word ("print", "cut") only counts alone: "print my name" is not ctrl+p
-            # Check whole phrase match or word boundary
             pattern = r"\b" + re.escape(trigger) + r"\b"
             if re.search(pattern, clean_text):
-                remainder = re.sub(pattern, " ", clean_text, count=1)
-                if len(remainder.split()) <= MAX_EXTRA_WORDS:
+                remainder_words = re.sub(pattern, " ", clean_text, count=1).split()
+                if len(remainder_words) <= MAX_EXTRA_WORDS and not (set(remainder_words) & SLOT_REMAINDER_WORDS):
                     return RouteResult(
                         is_vision=False,
                         command=utterance.strip(),
                         intent=self._trigger_map[trigger],
                     )
 
-        # 3. Commands that carry their own argument: open <app>, type <text>, go to <site>
-        slot = self._slot_intent(utterance.strip(), clean_text)
-        if slot:
-            return RouteResult(is_vision=False, command=utterance.strip(), intent=slot)
-
-        # 4. Jev understands paraphrases the trigger list misses ("maximise it", "make it louder")
+        # 4. Jev decision model: understands paraphrases and natural intent ("make it louder",
+        #    "open my 5th gmail account", "bring back discord") and turns them into fast commands.
         if self.use_jev:
-            picked = jev.choose(
-                {"spoken_command": utterance.strip()},
-                "Which desktop action does this spoken command ask for? The text comes from "
-                "speech recognition, so words may be misheard (\"new debt\" for \"new tab\"). "
-                "Answer none unless one action fully does what was asked.",
-                self._jev_options,
-            )
-            if picked and picked[0] in self._intents_by_name and picked[1] >= JEV_MIN_CONFIDENCE:
+            jev_intent = self._jev_route(utterance.strip(), clean_text)
+            if jev_intent is not None:
                 return RouteResult(
                     is_vision=False,
                     command=utterance.strip(),
-                    intent=self._intents_by_name[picked[0]],
+                    intent=jev_intent,
                 )
 
         # 5. Fallback to Tier 2 Vision Agent
@@ -110,6 +134,145 @@ class CommandRouter:
             is_vision=True,
             command=utterance.strip(),
             intent=None,
+        )
+
+    def _jev_route(self, raw: str, clean: str = "") -> Optional[Intent]:
+        """Use TypeSafe Jev decision model to map natural speech onto deterministic commands."""
+        options = dict(self._jev_options)
+        try:
+            for p in apps.chrome_profiles()[:12]:
+                idx = p["index"]
+                pdir = p["dir"]
+                label = f"#{idx} {p['name']} ({p['email'] or pdir})"
+                options[f"chrome_gmail:{pdir}"] = f"Open Gmail / email #{idx} ({label}) in Chrome"
+                options[f"chrome_profile:{pdir}"] = f"Open / switch to Chrome profile #{idx} ({label})"
+        except Exception:
+            pass
+
+        try:
+            for hwnd, title, exe in apps.open_windows()[:12]:
+                short_title = title[:40].replace(":", " ")
+                options[f"focus_win:{hwnd}:{short_title}"] = f"Switch to / focus / open existing window '{short_title}' ({exe})"
+                options[f"min_win:{hwnd}:{short_title}"] = f"Minimize window '{short_title}' ({exe})"
+                options[f"max_win:{hwnd}:{short_title}"] = f"Maximize window '{short_title}' ({exe})"
+                options[f"close_win:{hwnd}:{short_title}"] = f"Close window '{short_title}' ({exe})"
+        except Exception:
+            pass
+
+        for site_key, site_url in SITES.items():
+            if len(options) < 245:
+                options[f"open_site:{site_key}"] = f"Open {site_key} website ({site_url})"
+
+        for app_key, (disp, _app_id) in apps.COMMON_APPS.items():
+            if len(options) < 252:
+                options[f"open_app:{app_key}"] = f"Open / launch {disp} application"
+
+        picked = jev.choose(
+            {"spoken_command": raw},
+            "Which desktop action does this spoken command ask for? The text comes from "
+            "speech recognition, so words may be misheard (\"new debt\" for \"new tab\", "
+            "\"third number gmail\" for Gmail #3). "
+            "Answer none unless one action fully does what was asked.",
+            options,
+        )
+        if not picked or picked[1] < JEV_MIN_CONFIDENCE:
+            return None
+
+        choice = picked[0]
+        if choice in self._intents_by_name:
+            return self._intents_by_name[choice]
+        if choice.startswith("chrome_gmail:"):
+            pdir = choice.split(":", 1)[1]
+            return _make(
+                "open_chrome_gmail",
+                IntentAction("launch_app", target="chrome.exe", command=pdir, args=[f"--profile-directory={pdir}", "https://mail.google.com"]),
+            )
+        if choice.startswith("chrome_profile:"):
+            pdir = choice.split(":", 1)[1]
+            return _make(
+                "open_chrome_profile",
+                IntentAction("launch_app", target="chrome.exe", command=pdir, args=[f"--profile-directory={pdir}"]),
+            )
+        if choice.startswith("focus_win:"):
+            parts = choice.split(":", 2)
+            return _make("focus_window", IntentAction("focus_window", target=parts[1], command=parts[2] if len(parts) > 2 else ""))
+        if choice.startswith("min_win:"):
+            parts = choice.split(":", 2)
+            return _make("minimize_window", IntentAction("minimize_window", target=parts[1], command=parts[2] if len(parts) > 2 else ""))
+        if choice.startswith("max_win:"):
+            parts = choice.split(":", 2)
+            return _make("maximize_window", IntentAction("maximize_window", target=parts[1], command=parts[2] if len(parts) > 2 else ""))
+        if choice.startswith("close_win:"):
+            parts = choice.split(":", 2)
+            intent = _make("close_window", IntentAction("close_window", target=parts[1], command=parts[2] if len(parts) > 2 else ""))
+            intent.is_destructive = False
+            return intent
+        if choice.startswith(("open_site:", "site:")):
+            site_key = choice.split(":", 1)[1]
+            if site_key in SITES:
+                return _make("open_url", IntentAction("open_url", target=SITES[site_key]))
+        if choice.startswith("open_app:"):
+            app_key = choice.split(":", 1)[1]
+            try:
+                found = apps.find(app_key, allow_jev=False)
+            except TypeError:
+                found = apps.find(app_key)
+            if found:
+                return _make("open_app", IntentAction("open_app", target=found[1], command=found[0]))
+        return None
+
+    def _match_chrome_profile_slot(self, clean: str) -> Optional[Intent]:
+        """Match commands targeting a specific Chrome profile or numbered/named Gmail account."""
+        m = re.match(
+            r"(?:in\s+(?:chrome|browser)\s+)?(?:open|launch|start|run|switch to|switch back to|go to|focus|show|bring up|choose|select|pick|click|use)\s+(.+)$",
+            clean,
+        )
+        if not m:
+            return None
+        rest = m.group(1).strip()
+        words = rest.split()
+        if len(words) > 8 or (words and words[-1] in ("and", "or", "from")):
+            return None
+
+        gmail_words = {"gmail", "gmails", "email", "emails", "inbox"}
+        profile_words = {"profile", "profiles", "account", "accounts"}
+        has_gmail = bool(set(words) & gmail_words)
+        has_profile = bool(set(words) & profile_words)
+        if not (has_gmail or has_profile):
+            return None
+
+        qualifiers = [
+            w for w in words
+            if w not in (gmail_words | profile_words | {"chrome", "google", "browser", "my", "this", "that", "in", "on", "of", "number", "no", "num"})
+        ]
+        if not qualifiers:
+            return None
+
+        prof = apps.find_chrome_profile(rest)
+        if not prof:
+            return None
+
+        pdir = prof["dir"]
+        if has_gmail:
+            label = f"{prof['name']} ({prof['email'] or pdir})"
+            return _make(
+                "open_chrome_gmail",
+                IntentAction(
+                    "launch_app",
+                    target="chrome.exe",
+                    command=label,
+                    args=[f"--profile-directory={pdir}", "https://mail.google.com"],
+                ),
+            )
+        label = f"{prof['name']} ({pdir})"
+        return _make(
+            "open_chrome_profile",
+            IntentAction(
+                "launch_app",
+                target="chrome.exe",
+                command=label,
+                args=[f"--profile-directory={pdir}"],
+            ),
         )
 
     def _slot_intent(self, raw: str, clean: str) -> Optional[Intent]:
@@ -120,6 +283,11 @@ class CommandRouter:
         m = re.match(r"(?:type|enter|write)\s+(.+?)\s+in\s+(?:the\s+)?(?:search\s+bar|search|address\s+bar|url\s+bar)$", clean)
         if m:
             return _make("search_in_browser", IntentAction("search_in_browser", target=_dictation(m.group(1).strip())))
+
+        # Chrome profile or numbered/named Gmail account ("open 3rd gmail", "open third number profile")
+        chrome_prof_intent = self._match_chrome_profile_slot(clean)
+        if chrome_prof_intent is not None:
+            return chrome_prof_intent
 
         # Typed into specific target window: "in notepad type hello world", "type in the notepad i'm working on it"
         m = re.match(r"(?:in\s+(?:the\s+)?([a-zA-Z0-9_\-\s]+?)\s*,?\s*(?:type|write|dictate)\s+(.+))", clean)
@@ -171,7 +339,7 @@ class CommandRouter:
             if keys:
                 return _make("press_keys", IntentAction("hotkey", keys=keys))
         # Switch to / focus / bring up / open existing window
-        m = re.match(r"(?:switch to|switch back to|go to|go back to|focus|show me|show|bring up|bring back|open(?: the)?)\s+(.+?)(?:\s+(?:that is|which is)?\s*(?:already\s+)?open(?:ed)?(?:\s+on\s+the(?:\s+screen)?)?)?$", clean)
+        m = re.match(r"(?:switch to|switch back to|go to|go back to|focus|show me|show|bring up|bring back|open(?: the)?)\s+(.+?)(?:\s+(?:that is|which is)?\s*(?:already\s+)?open(?:ed)?(?:\s+on(?:\s+the)?(?:\s+screen)?)?)?$", clean)
         if m:
             target = m.group(1).strip()
             win = apps.find_window(target)
@@ -245,7 +413,10 @@ class CommandRouter:
             return None
         m = re.match(r"(?:open|launch|start|run)\s+(.+?)(?:\s+app)?$", clean)
         if m:
-            found = apps.find(m.group(1))
+            try:
+                found = apps.find(m.group(1), allow_jev=not self.use_jev)
+            except TypeError:
+                found = apps.find(m.group(1))
             if found:
                 return _make("open_app", IntentAction("open_app", target=found[1], command=found[0]))
         return None

@@ -211,3 +211,27 @@ def test_on_level_callback_throttled_and_normalized():
     recorder.feed_audio_chunk(np.zeros((400, 1), dtype=np.float32))
     assert len(levels) == 2
     assert levels[1] == 0.0
+
+
+def test_vad_adaptive_post_speech_silence_ignores_low_room_noise():
+    """After normal speech (peak 0.35), low room noise (peak 0.02) must count as silence, not keep recording until 7.5s timeout."""
+    import time
+    fired = []
+    recorder = AudioRecorder(sample_rate=16000)
+    recorder.on_silence = lambda: fired.append(1)
+    recorder.is_recording = True
+    recorder._recording_start_time = time.time() - 1.0
+    recorder.post_speech_silence = 0.05
+
+    speech = np.ones((1600, 1), dtype=np.float32) * 0.35
+    recorder.feed_audio_chunk(speech)
+    assert recorder._speech_detected is True
+
+    low_room_noise = np.ones((1600, 1), dtype=np.float32) * 0.02
+    recorder.feed_audio_chunk(low_room_noise)
+    assert recorder._silence_start_time is not None
+    time.sleep(0.06)
+    recorder.feed_audio_chunk(low_room_noise)
+    time.sleep(0.05)
+    assert fired == [1]
+

@@ -232,3 +232,155 @@ def test_phonetic_and_relative_window_fixes(router, monkeypatch):
     r_close = router.route("close this website only")
     assert r_close.is_vision is False
     assert r_close.intent.name == "close_tab"
+
+    r_upset = router.route("okay close this upset")
+    assert r_upset.is_vision is False
+    assert r_upset.intent.name == "close_tab"
+
+    r_chrome_open = router.route("open chrome browser that is already open on the")
+    assert r_chrome_open.is_vision is False
+    assert r_chrome_open.intent.name == "focus_window"
+    assert r_chrome_open.intent.action.target == "456"
+
+
+def test_chrome_multi_profile_and_gmail_routing(router, monkeypatch):
+    """Verify ordinal and named Chrome profiles / Gmail accounts route deterministically."""
+    from src import apps
+
+    sample_profiles = [
+        {"index": 1, "dir": "Default", "name": "Zaid hossain", "email": "zahidhossin39@gmail.com"},
+        {"index": 2, "dir": "Profile 2", "name": "Zaid", "email": "zahidhossin509@gmail.com"},
+        {"index": 3, "dir": "Profile 5", "name": "Zaid", "email": "zahidhosson28@gmail.com"},
+        {"index": 4, "dir": "Profile 6", "name": "zahid", "email": "zahidhossain3009@gmail.com"},
+        {"index": 5, "dir": "Profile 7", "name": "Zaid", "email": "hello.zaidhossain@gmail.com"},
+        {"index": 6, "dir": "Profile 8", "name": "Zaid.W", "email": "work.zaid.business@gmail.com"},
+    ]
+    monkeypatch.setattr(apps, "chrome_profiles", lambda: sample_profiles)
+
+    for phrase in (
+        "open 3rd gmail",
+        "open third number gmail",
+        "open 3 third number gmail",
+        "open gmail 3",
+        "go to 3rd email",
+    ):
+        res = router.route(phrase)
+        assert res.is_vision is False, f"Failed on {phrase!r}"
+        assert res.intent.name == "open_chrome_gmail"
+        assert res.intent.action.type == "launch_app"
+        assert res.intent.action.target == "chrome.exe"
+        assert res.intent.action.args == ["--profile-directory=Profile 5", "https://mail.google.com"]
+
+    for phrase in (
+        "open third number profile",
+        "open 3rd profile in chrome",
+        "open chrome 3rd profile",
+        "switch to profile 3",
+    ):
+        res = router.route(phrase)
+        assert res.is_vision is False, f"Failed on {phrase!r}"
+        assert res.intent.name == "open_chrome_profile"
+        assert res.intent.action.args == ["--profile-directory=Profile 5"]
+
+    res_5 = router.route("open 5th gmail")
+    assert res_5.is_vision is False
+    assert res_5.intent.action.args == ["--profile-directory=Profile 7", "https://mail.google.com"]
+
+    res_6 = router.route("open 6th gmail")
+    assert res_6.is_vision is False
+    assert res_6.intent.action.args == ["--profile-directory=Profile 8", "https://mail.google.com"]
+
+    res_work = router.route("open work gmail")
+    assert res_work.is_vision is False
+    assert res_work.intent.action.args == ["--profile-directory=Profile 8", "https://mail.google.com"]
+
+    res_last = router.route("open last chrome profile")
+    assert res_last.is_vision is False
+    assert res_last.intent.action.args == ["--profile-directory=Profile 8"]
+
+    # Out-of-bounds profile ordinal should not match a nonexistent profile
+    res_oob = router.route("open 9th gmail")
+    assert res_oob.intent is None or res_oob.intent.name != "open_chrome_gmail"
+
+
+def test_jev_decision_model_turns_decisions_into_commands(router, monkeypatch):
+    """Verify Jev decision model converts dynamic Chrome profile, window, site, and app choices into commands."""
+    from unittest.mock import patch
+    from src import apps
+
+    sample_profiles = [
+        {"index": 1, "dir": "Default", "name": "Zaid hossain", "email": "zahidhossin39@gmail.com"},
+        {"index": 2, "dir": "Profile 2", "name": "Zaid", "email": "zahidhossin509@gmail.com"},
+        {"index": 3, "dir": "Profile 5", "name": "Zaid", "email": "zahidhosson28@gmail.com"},
+    ]
+    monkeypatch.setattr(apps, "chrome_profiles", lambda: sample_profiles)
+    monkeypatch.setattr(apps, "open_windows", lambda: [(321, "Google Chrome"), (654, "Discord")])
+    router.use_jev = True
+
+    with patch("src.jev.choose", return_value=("chrome_gmail:Profile 5", 0.94)):
+        res = router.route("check the inbox on my third account please")
+        assert res.is_vision is False
+        assert res.intent.name == "open_chrome_gmail"
+        assert res.intent.action.args == ["--profile-directory=Profile 5", "https://mail.google.com"]
+
+    with patch("src.jev.choose", return_value=("chrome_profile:Profile 2", 0.91)):
+        res = router.route("let me use my second browser persona")
+        assert res.is_vision is False
+        assert res.intent.name == "open_chrome_profile"
+        assert res.intent.action.args == ["--profile-directory=Profile 2"]
+
+    with patch("src.jev.choose", return_value=("focus_win:321:Google Chrome", 0.92)):
+        res = router.route("return my attention to the web session")
+        assert res.is_vision is False
+        assert res.intent.name == "focus_window"
+        assert res.intent.action.target == "321"
+
+    with patch("src.jev.choose", return_value=("min_win:654:Discord", 0.90)):
+        res = router.route("put the chat window away for now")
+        assert res.is_vision is False
+        assert res.intent.name == "minimize_window"
+        assert res.intent.action.target == "654"
+
+    with patch("src.jev.choose", return_value=("site:gmail", 0.95)):
+        res = router.route("take me to my email")
+        assert res.is_vision is False
+        assert res.intent.action.type == "open_url"
+        assert res.intent.action.target == "https://mail.google.com"
+
+
+def test_chrome_local_state_parsing_and_profile_lookup(tmp_path):
+    """Verify apps.chrome_profiles and apps.find_chrome_profile parse Chrome's Local State JSON."""
+    import json
+    from src import apps
+
+    local_state = {
+        "profile": {
+            "profiles_order": ["Default", "Profile 2", "Profile 5", "Profile 8"],
+            "info_cache": {
+                "Default": {"name": "Zaid hossain", "user_name": "zahidhossin39@gmail.com"},
+                "Profile 2": {"name": "Zaid", "user_name": "zahidhossin509@gmail.com"},
+                "Profile 5": {"name": "Zaid", "user_name": "zahidhosson28@gmail.com"},
+                "Profile 8": {"name": "Zaid.W", "user_name": "work.zaid.business@gmail.com"},
+            },
+        }
+    }
+    state_file = tmp_path / "Local State"
+    state_file.write_text(json.dumps(local_state), encoding="utf-8")
+
+    profs = apps.chrome_profiles(local_state_path=str(state_file))
+    assert len(profs) == 4
+    assert profs[2]["dir"] == "Profile 5"
+    assert profs[2]["index"] == 3
+
+    p3 = apps.find_chrome_profile("third number", local_state_path=str(state_file))
+    assert p3 is not None and p3["dir"] == "Profile 5"
+
+    p_work = apps.find_chrome_profile("work", local_state_path=str(state_file))
+    assert p_work is not None and p_work["dir"] == "Profile 8"
+
+    p_last = apps.find_chrome_profile("last", local_state_path=str(state_file))
+    assert p_last is not None and p_last["dir"] == "Profile 8"
+
+    assert apps.find_chrome_profile("9th", local_state_path=str(state_file)) is None
+
+

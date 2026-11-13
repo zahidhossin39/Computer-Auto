@@ -38,6 +38,10 @@ class AudioRecorder:
         self._last_level_time = 0.0
         self._voice_streak_chunks = 0
         self._voice_streak_sec = 0.0
+        self._active_streak_chunks = 0
+        self._active_streak_sec = 0.0
+        self._speech_peak = 0.0
+        self._speech_rms = 0.0
         self._noise = None  # learned background (peak, rms), see _process_vad
         self._last_good = None  # (device, rate, channels) that last opened fine
         self.speech_threshold_rms = 0.003
@@ -45,7 +49,7 @@ class AudioRecorder:
         self.silence_threshold_rms = 0.0025
         self.silence_threshold_peak = 0.008
         self.initial_silence_timeout = 4.5
-        self.post_speech_silence = 0.8
+        self.post_speech_silence = 0.6
         self.max_duration = 7.5
         self.calibration_s = 0.3  # see _process_vad
 
@@ -85,6 +89,8 @@ class AudioRecorder:
                 chunk_dur = len(chunk) / max(1, self.actual_sample_rate)
                 self._voice_streak_chunks += 1
                 self._voice_streak_sec += chunk_dur
+                self._speech_peak = max(self._speech_peak, peak)
+                self._speech_rms = max(self._speech_rms, rms)
                 if self._voice_streak_chunks >= 2 or self._voice_streak_sec >= 0.06:
                     self._speech_detected = True
                     self._speech_start_time = now
@@ -103,11 +109,32 @@ class AudioRecorder:
                     self._recording_start_time = now
                     return
         else:
-            is_active = (rms > max(self.silence_threshold_rms, noise_rms * 2)
-                         or peak > max(self.silence_threshold_peak, noise_peak * 2))
+            adaptive_rms = max(
+                self.silence_threshold_rms,
+                noise_rms * 2.0,
+                min(0.025, self._speech_rms * 0.15),
+            )
+            adaptive_peak = max(
+                self.silence_threshold_peak,
+                noise_peak * 2.0,
+                min(0.035, self._speech_peak * 0.15),
+            )
+            is_active = rms > adaptive_rms or peak > adaptive_peak
             if is_active:
-                self._silence_start_time = 0.0
+                self._speech_peak = max(self._speech_peak, peak)
+                self._speech_rms = max(self._speech_rms, rms)
+                chunk_dur = len(chunk) / max(1, self.actual_sample_rate)
+                self._active_streak_chunks += 1
+                self._active_streak_sec += chunk_dur
+                if (
+                    self._silence_start_time == 0.0
+                    or self._active_streak_chunks >= 2
+                    or self._active_streak_sec >= 0.06
+                ):
+                    self._silence_start_time = 0.0
             else:
+                self._active_streak_chunks = 0
+                self._active_streak_sec = 0.0
                 if self._silence_start_time == 0.0:
                     self._silence_start_time = now
                 elif now - self._silence_start_time >= self.post_speech_silence:
@@ -172,6 +199,10 @@ class AudioRecorder:
         self._noise = None
         self._voice_streak_chunks = 0
         self._voice_streak_sec = 0.0
+        self._active_streak_chunks = 0
+        self._active_streak_sec = 0.0
+        self._speech_peak = 0.0
+        self._speech_rms = 0.0
         self._last_level_time = 0.0
         self._recording_start_time = time.time()
         self._generation += 1

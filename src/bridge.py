@@ -350,9 +350,45 @@ def main() -> None:
                 except Exception:
                     pass
 
-    # Reserve real stdout exclusively for JSON-Lines events; route print() to stderr
+    # Reserve real stdout exclusively for JSON-Lines events; route print() to stderr + logs/app.log
     json_out = sys.stdout
-    sys.stdout = sys.stderr
+    try:
+        from src.config import get_app_dir
+        log_dir = get_app_dir() / "logs"
+        log_dir.mkdir(exist_ok=True)
+        log_file = open(log_dir / "app.log", "a", encoding="utf-8", buffering=1)
+
+        class _TeeStderr:
+            def __init__(self, stream, lf):
+                self._stream = stream
+                self._log = lf
+
+            def write(self, message):
+                try:
+                    self._stream.write(message)
+                except Exception:
+                    pass
+                try:
+                    self._log.write(message)
+                except Exception:
+                    pass
+
+            def flush(self):
+                try:
+                    self._stream.flush()
+                except Exception:
+                    pass
+                try:
+                    self._log.flush()
+                except Exception:
+                    pass
+
+            def __getattr__(self, name):
+                return getattr(self._stream, name)
+
+        sys.stdout = _TeeStderr(sys.stderr, log_file)
+    except Exception:
+        sys.stdout = sys.stderr
 
     bridge = StdioBridge(out_stream=json_out)
     bridge.serve_forever()

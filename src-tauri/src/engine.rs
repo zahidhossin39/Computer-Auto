@@ -11,7 +11,7 @@ use tauri::{AppHandle, Emitter};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-pub const APP_VERSION: &str = "2.2.0";
+pub const APP_VERSION: &str = "2.3.0";
 pub const CREATE_NO_WINDOW: u32 = 0x08000000;
 const DEPRECATED_MODEL: &str = "google/gemini-3.1-flash-lite";
 const DEFAULT_MODEL: &str = "google/gemini-2.5-flash";
@@ -563,12 +563,161 @@ pub fn map_app_alias(name: &str) -> Option<&'static str> {
     }
 }
 
+fn find_chrome_exe() -> String {
+    let candidates = [
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    ];
+    for c in candidates {
+        if Path::new(c).is_file() {
+            return c.to_string();
+        }
+    }
+    if let Ok(local) = std::env::var("LOCALAPPDATA") {
+        let p = PathBuf::from(local).join(r"Google\Chrome\Application\chrome.exe");
+        if p.is_file() {
+            return p.to_string_lossy().to_string();
+        }
+    }
+    "chrome".to_string()
+}
+
+pub fn try_chrome_profile_command(lower: &str) -> Option<Result<String, String>> {
+    let is_gmail = ["gmail", "g mail", "mail", "email", "inbox"]
+        .iter()
+        .any(|k| lower.contains(k));
+    let is_profile = ["profile", "account"].iter().any(|k| lower.contains(k));
+    if !is_gmail && !is_profile {
+        return None;
+    }
+
+    let local_app_data = std::env::var("LOCALAPPDATA").ok()?;
+    let state_path = PathBuf::from(local_app_data)
+        .join("Google")
+        .join("Chrome")
+        .join("User Data")
+        .join("Local State");
+    let raw = fs::read_to_string(state_path).ok()?;
+    let data: Value = serde_json::from_str(&raw).ok()?;
+    let profile_obj = data.get("profile")?;
+    let info_cache = profile_obj.get("info_cache")?.as_object()?;
+
+    let mut ordered_dirs: Vec<String> = Vec::new();
+    if let Some(arr) = profile_obj.get("profiles_order").and_then(|v| v.as_array()) {
+        for item in arr {
+            if let Some(d) = item.as_str() {
+                if info_cache.contains_key(d) {
+                    ordered_dirs.push(d.to_string());
+                }
+            }
+        }
+    }
+    for k in info_cache.keys() {
+        if !ordered_dirs.contains(k) {
+            ordered_dirs.push(k.clone());
+        }
+    }
+    if ordered_dirs.is_empty() {
+        return None;
+    }
+
+    let ordinal_pairs: &[(&[&str], usize)] = &[
+        (&["1st", "first", "number 1", "1 number", "default", "primary"], 1),
+        (&["2nd", "second", "number 2", "2 number"], 2),
+        (&["3rd", "third", "number 3", "3 number"], 3),
+        (&["4th", "fourth", "number 4", "4 number"], 4),
+        (&["5th", "fifth", "number 5", "5 number"], 5),
+        (&["6th", "sixth", "number 6", "6 number"], 6),
+        (&["7th", "seventh", "number 7", "7 number"], 7),
+        (&["8th", "eighth", "number 8", "8 number"], 8),
+    ];
+
+    let mut matched_idx: Option<usize> = None;
+    for (tokens, idx) in ordinal_pairs {
+        if tokens.iter().any(|t| lower.contains(t)) {
+            matched_idx = Some(*idx);
+            break;
+        }
+    }
+    if matched_idx.is_none() {
+        for word in lower.split_whitespace() {
+            if let Ok(n) = word.parse::<usize>() {
+                if (1..=10).contains(&n) {
+                    matched_idx = Some(n);
+                    break;
+                }
+            }
+        }
+    }
+
+    let target_dir = if let Some(idx) = matched_idx {
+        ordered_dirs.get(idx - 1)?.clone()
+    } else if lower.contains("last") {
+        ordered_dirs.last()?.clone()
+    } else {
+        let mut found: Option<String> = None;
+        for dir in &ordered_dirs {
+            if let Some(meta) = info_cache.get(dir) {
+                let email = meta
+                    .get("user_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                let name = meta
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                let handle = email.split('@').next().unwrap_or("");
+                if (!handle.is_empty() && lower.contains(handle))
+                    || (!name.is_empty() && name != "zaid" && lower.contains(&name))
+                {
+                    found = Some(dir.clone());
+                    break;
+                }
+                for part in handle.split(['.', '_', '-']) {
+                    if part.len() >= 3 && part != "zaid" && lower.contains(part) {
+                        found = Some(dir.clone());
+                        break;
+                    }
+                }
+                if found.is_some() {
+                    break;
+                }
+            }
+        }
+        found?
+    };
+
+    let chrome_exe = find_chrome_exe();
+    let mut cmd = no_window_cmd(&chrome_exe);
+    cmd.arg(format!("--profile-directory={target_dir}"));
+    if is_gmail {
+        cmd.arg("https://mail.google.com");
+    }
+    Some(
+        cmd.spawn()
+            .map(|_| {
+                if is_gmail {
+                    format!("Opened Gmail in Chrome ({target_dir})")
+                } else {
+                    format!("Opened Chrome ({target_dir})")
+                }
+            })
+            .map_err(|e| format!("Failed to launch Chrome profile {target_dir}: {e}")),
+    )
+}
+
 pub fn try_native_command(raw_text: &str) -> Option<Result<String, String>> {
     let text = raw_text.trim();
     if text.is_empty() {
         return Some(Err("Empty command".to_string()));
     }
     let lower = text.to_lowercase();
+
+    if let Some(res) = try_chrome_profile_command(&lower) {
+        return Some(res);
+    }
 
     // Volume & Media
     if matches!(

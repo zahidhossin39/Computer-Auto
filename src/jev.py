@@ -5,6 +5,12 @@ from typing import Optional
 
 import requests
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions"
 MODEL = "typesafe/jev-1.13"
 _session = requests.Session()  # keep-alive: skips a TLS handshake per call

@@ -208,3 +208,52 @@ def test_type_text_preserves_non_text_clipboard_formats():
     mock_hotkey.assert_called_once_with("ctrl", "v")
     assert clip_state[CF_UNICODETEXT] == "old text"
     assert clip_state[CF_DIB] == b"\x28\x00\x00\x00fake_dib"
+
+
+def test_launch_app_focuses_existing_window_instead_of_opening_duplicate(executor, monkeypatch):
+    """When Chrome (or another app) is already open and no special args are passed, focus it instead of spawning a duplicate."""
+    from src import apps
+    monkeypatch.setattr(apps, "find_window", lambda name: (999, "Google Chrome") if "chrome" in name.lower() else None)
+
+    with patch.object(executor, "focus_window", return_value=True) as mock_focus, \
+         patch("src.executor.windows._shell_launch") as mock_shell, \
+         patch("os.startfile", create=True) as mock_startfile:
+        assert executor.launch_app(IntentAction(type="launch_app", target="chrome.exe")) is True
+        mock_focus.assert_called_once_with(999)
+        mock_shell.assert_not_called()
+        mock_startfile.assert_not_called()
+
+
+def test_launch_app_with_chrome_profile_args_quotes_spaces_and_bypasses_focus(executor, monkeypatch):
+    """When launching a specific Chrome profile (--profile-directory=Profile 5), do not just focus any Chrome window; pass quoted args."""
+    from src import apps
+    monkeypatch.setattr(apps, "find_window", lambda name: (999, "Google Chrome"))
+
+    with patch.object(executor, "focus_window") as mock_focus, \
+         patch.object(executor, "_resolve_executable", return_value=r"C:\Program Files\Google\Chrome\Application\chrome.exe"), \
+         patch("os.path.isfile", return_value=True), \
+         patch("src.executor.windows._shell_launch", return_value=True) as mock_shell:
+        action = IntentAction(
+            type="launch_app",
+            target="chrome.exe",
+            args=["--profile-directory=Profile 5", "https://mail.google.com"],
+        )
+        assert executor.launch_app(action) is True
+        mock_focus.assert_not_called()
+        mock_shell.assert_called_once_with(
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            '"--profile-directory=Profile 5" https://mail.google.com',
+        )
+
+
+def test_run_action_open_app_focuses_existing_window(executor, monkeypatch):
+    """run_action('open_app') focuses an already-open window when found."""
+    from src import apps
+    monkeypatch.setattr(apps, "find_window", lambda name: (777, "Discord") if "discord" in name.lower() else None)
+
+    with patch.object(executor, "focus_window", return_value=True) as mock_focus, \
+         patch("src.executor.windows._shell_launch") as mock_shell:
+        assert executor.run_action(IntentAction(type="open_app", target="com.squirrel.Discord.Discord")) is True
+        mock_focus.assert_called_once_with(777)
+        mock_shell.assert_not_called()
+

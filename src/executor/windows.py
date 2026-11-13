@@ -383,6 +383,11 @@ class WindowsExecutor:
                 type_text(action.target)
                 return True
             elif action.type == "open_app" and action.target:
+                if not action.args:
+                    from src import apps
+                    win = apps.find_window(action.command or action.target)
+                    if win and self.focus_window(win[0]):
+                        return True
                 explorer = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "explorer.exe")
                 apps_uri = f"shell:AppsFolder\\{action.target}"
                 if _shell_launch(explorer, apps_uri):
@@ -449,8 +454,31 @@ class WindowsExecutor:
             print(f"[EXECUTOR]: {action.type} failed ({e})")
             return False
 
+    @staticmethod
+    def _resolve_executable(target: str) -> str:
+        """Resolve executable name to an absolute path via PATH or standard Windows install locations."""
+        found = shutil.which(target)
+        if found:
+            return found
+        lower = target.lower()
+        candidates = []
+        if lower in ("chrome.exe", "chrome"):
+            for env_var in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"):
+                base = os.environ.get(env_var, "")
+                if base:
+                    candidates.append(os.path.join(base, "Google", "Chrome", "Application", "chrome.exe"))
+        elif lower in ("msedge.exe", "msedge"):
+            for env_var in ("PROGRAMFILES(X86)", "PROGRAMFILES", "LOCALAPPDATA"):
+                base = os.environ.get(env_var, "")
+                if base:
+                    candidates.append(os.path.join(base, "Microsoft", "Edge", "Application", "msedge.exe"))
+        for path in candidates:
+            if os.path.isfile(path):
+                return path
+        return target
+
     def launch_app(self, action: IntentAction) -> bool:
-        """Launch a desktop application or fallback executable."""
+        """Launch a desktop application or fallback executable (or focus existing window if already open)."""
         if not action.target:
             return False
 
@@ -460,17 +488,27 @@ class WindowsExecutor:
         if action.fallback_target:
             targets.append(action.fallback_target)
 
+        # If no CLI arguments are requested (e.g. "open chrome"), focus an already-open window
+        # instead of spawning a duplicate browser/application window.
+        if not action.args:
+            try:
+                from src import apps
+                for t in targets:
+                    win = apps.find_window(t)
+                    if win and self.focus_window(win[0]):
+                        return True
+            except Exception:
+                pass
+
+        args_str = subprocess.list2cmdline(action.args) if action.args else ""
+
         for target in targets:
-            # Resolve executable to an absolute path via PATH if available.
-            # CRITICAL: On Windows 10/11, relative 'notepad.exe' invokes the UWP/MSIX App Execution Alias
-            # (%LOCALAPPDATA%\Microsoft\WindowsApps\notepad.exe) which creates a suspended/invisible
-            # background process when launched from an IDE/terminal. Resolving via shutil.which yields
-            # 'C:\Windows\System32\notepad.exe' which reliably opens an interactive visible GUI window.
-            resolved_target = shutil.which(target) or target
+            # Resolve executable to an absolute path via PATH or standard install locations.
+            resolved_target = self._resolve_executable(target)
 
             # 0. Ask the running explorer.exe to launch it. The child is then parented by explorer,
             # escaping any IDE sandbox/job/desktop our own process is stuck in.
-            if os.path.isfile(resolved_target) and _shell_launch(resolved_target, " ".join(action.args)):
+            if os.path.isfile(resolved_target) and _shell_launch(resolved_target, args_str):
                 return True
 
             # 1. On Windows, use os.startfile to ensure the process launches
@@ -478,7 +516,6 @@ class WindowsExecutor:
             # preventing invisible windows when launched from sandboxed/IDE terminals.
             if hasattr(os, "startfile"):
                 try:
-                    args_str = " ".join(action.args) if action.args else ""
                     if args_str:
                         os.startfile(resolved_target, "open", arguments=args_str)
                     else:

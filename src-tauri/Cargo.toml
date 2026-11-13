@@ -1,7 +1,7 @@
 [package]
 name = "computer-auto"
-version = "2.2.0"
-description = "Computer-Auto v2.0 Native Desktop Assistant"
+version = "2.3.0"
+description = "Computer-Auto v2.3 Native Desktop Assistant"
 authors = ["Zaid Hossain"]
 edition = "2021"
 

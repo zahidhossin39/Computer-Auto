@@ -42,6 +42,8 @@ class SpeechRecognizer:
     """Parakeet TDT on CPU by default; `cloud_model` (e.g. openai/gpt-4o-transcribe) sends
     audio to OpenRouter instead: ~1.3s, ~$0.0002 a command, better with names."""
 
+    _chat_only_models: set[str] = set()
+
     def __init__(
         self,
         model_dir: Optional[str] = "models/parakeet-tdt-0.6b-int8",
@@ -119,23 +121,27 @@ class SpeechRecognizer:
             wav_bytes = buf.getvalue()
 
             # 1. Standard audio/transcriptions endpoint (tested contract & whisper-compatible)
-            try:
-                r = requests.post(
-                    TRANSCRIBE_URL,
-                    headers={"Authorization": f"Bearer {key}"},
-                    data={"model": model, "prompt": VOCAB_HINT},
-                    files={"file": ("command.wav", wav_bytes, "audio/wav")},
-                    timeout=15,
-                )
-                r.raise_for_status()
-                text = str(r.json().get("text", "")).strip().strip("\"'").rstrip(".?!,:;\"'").strip().lower()
-                if text:
-                    print(f'[STT CLOUD]: "{text}" ({model})')
-                    return text
-            except Exception as e_std:
-                # If OpenRouter returns 400 (e.g. Model google/gemini-2.5-flash does not exist on transcription endpoint),
-                # use chat/completions with input_audio which Gemini natively supports.
-                pass
+            if model not in self._chat_only_models:
+                try:
+                    r = requests.post(
+                        TRANSCRIBE_URL,
+                        headers={"Authorization": f"Bearer {key}"},
+                        data={"model": model, "prompt": VOCAB_HINT},
+                        files={"file": ("command.wav", wav_bytes, "audio/wav")},
+                        timeout=15,
+                    )
+                    if getattr(r, "status_code", 200) in (400, 404, 405):
+                        self._chat_only_models.add(model)
+                        raise RuntimeError(f"HTTP {r.status_code}")
+                    r.raise_for_status()
+                    text = str(r.json().get("text", "")).strip().strip("\"'").rstrip(".?!,:;\"'").strip().lower()
+                    if text:
+                        print(f'[STT CLOUD]: "{text}" ({model})')
+                        return text
+                except Exception:
+                    # If OpenRouter returns 400 (e.g. Model google/gemini-2.5-flash does not exist on transcription endpoint),
+                    # use chat/completions with input_audio which Gemini natively supports.
+                    pass
 
             # 2. Multimodal chat/completions with input_audio fallback (Gemini / GPT-4o)
             try:

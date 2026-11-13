@@ -270,3 +270,34 @@ def test_cloud_fallback_when_local_missing_or_empty(tmp_path, monkeypatch, capsy
 
     assert result2 == "open calculator"
     mock_post2.assert_called_once()
+
+
+def test_cloud_stt_caches_chat_only_model_after_405(tmp_path, monkeypatch):
+    """When /audio/transcriptions returns 405 for a model, subsequent calls go directly to /chat/completions."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test-cloud-key")
+    SpeechRecognizer._chat_only_models.discard("google/gemini-2.5-flash")
+
+    t = np.linspace(0, 0.5, 8000, endpoint=False, dtype=np.float32)
+    audio = (0.05 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
+
+    resp_405 = Mock(status_code=405)
+    resp_chat = Mock(status_code=200)
+    resp_chat.raise_for_status.return_value = None
+    resp_chat.json.return_value = {
+        "choices": [{"message": {"content": "Open 3rd Gmail"}}]
+    }
+
+    rec = SpeechRecognizer(model_dir=str(tmp_path), mock_mode=False)
+    with patch("requests.post", side_effect=[resp_405, resp_chat]) as mock_post:
+        assert rec.transcribe(audio, sample_rate=16000) == "open 3rd gmail"
+        assert mock_post.call_count == 2
+        assert "google/gemini-2.5-flash" in SpeechRecognizer._chat_only_models
+
+    # Second call should skip /audio/transcriptions and call /chat/completions in 1 request
+    with patch("requests.post", return_value=resp_chat) as mock_post2:
+        assert rec.transcribe(audio, sample_rate=16000) == "open 3rd gmail"
+        assert mock_post2.call_count == 1
+        assert mock_post2.call_args[0][0].endswith("/chat/completions")
+
+    SpeechRecognizer._chat_only_models.discard("google/gemini-2.5-flash")
+
