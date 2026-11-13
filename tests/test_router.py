@@ -139,7 +139,7 @@ def test_close_ui_targets_fall_through_to_vision(router, monkeypatch):
 def test_minimize_maximize_restore_app_routing(router, monkeypatch):
     """minimize/maximize/restore <app> routes deterministically via find_window."""
     from src import apps
-    monkeypatch.setattr(apps, "find_window", lambda name: (456, "Claude") if "cloud" in name or "chrome" in name or "notepad" in name or "discord" in name else None)
+    monkeypatch.setattr(apps, "find_window", lambda name: (456, "Claude") if "cloud" in name or "claude" in name or "chrome" in name or "notepad" in name or "discord" in name else None)
 
     r_min = router.route("minimize chrome")
     assert r_min.is_vision is False
@@ -192,3 +192,43 @@ def test_search_bar_typing_slot_intent(router):
     assert r2.is_vision is False
     assert r2.intent.name == "search_in_browser"
     assert r2.intent.action.target == "github"
+
+
+def test_type_in_target_window(router, monkeypatch):
+    from src import apps
+    monkeypatch.setattr(apps, "find_window", lambda name: (789, "Notepad - Untitled") if "notepad" in name.lower() else None)
+
+    r1 = router.route("type in notepad hello world")
+    assert r1.is_vision is False
+    assert r1.intent.name == "type_in_window"
+    assert r1.intent.action.type == "type_in_window"
+    assert r1.intent.action.target == "hello world"
+    assert r1.intent.action.args == ["789"]
+
+    r2 = router.route("in notepad type test code")
+    assert r2.is_vision is False
+    assert r2.intent.name == "type_in_window"
+    assert r2.intent.action.target == "test code"
+
+
+def test_phonetic_and_relative_window_fixes(router, monkeypatch):
+    from src import apps
+    monkeypatch.setattr(apps, "find_window", lambda name: (456, "Google Chrome") if any(k in name.lower() for k in ("chrome", "browser")) else ((525580, "Discord") if "discord" in name.lower() else None))
+
+    r_min = router.route("minima's discord")
+    assert r_min.is_vision is False
+    assert r_min.intent.action.type == "minimize_window"
+    assert r_min.intent.action.target == "525580"
+
+    r_focus = router.route("open the browser that is already opened")
+    assert r_focus.is_vision is False
+    assert r_focus.intent.name == "focus_window"
+    assert r_focus.intent.action.target == "456"
+
+    r_tab = router.route("open new debt")
+    assert r_tab.is_vision is False
+    assert r_tab.intent.name == "new_tab"
+
+    r_close = router.route("close this website only")
+    assert r_close.is_vision is False
+    assert r_close.intent.name == "close_tab"

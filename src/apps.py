@@ -16,10 +16,36 @@ from src import jev
 _apps: Dict[str, str] = {}  # lower-case name -> AppID
 _names: Dict[str, str] = {}  # lower-case name -> display name
 _loaded = threading.Event()
+_load_started = False
+_load_lock = threading.Lock()
+
+COMMON_APPS = {
+    "notepad": ("Notepad", "Microsoft.WindowsNotepad_8wekyb3d8bbwe!App"),
+    "terminal": ("Terminal", "Microsoft.WindowsTerminal_8wekyb3d8bbwe!App"),
+    "calculator": ("Calculator", "Microsoft.WindowsCalculator_8wekyb3d8bbwe!App"),
+    "settings": ("Settings", "windows.immersivecontrolpanel_cw5n1h2txyewy!microsoft.windows.immersivecontrolpanel"),
+    "paint": ("Paint", "Microsoft.Paint_8wekyb3d8bbwe!App"),
+    "chrome": ("Google Chrome", "Chrome"),
+    "discord": ("Discord", "Discord"),
+    "spotify": ("Spotify", "Spotify"),
+    "code": ("Visual Studio Code", "VSCode"),
+    "claude": ("Claude", "Claude"),
+}
+
+
+def ensure_load_started() -> None:
+    """Ensure the Start menu index background loader has been triggered."""
+    global _load_started
+    with _load_lock:
+        if not _load_started:
+            _load_started = True
+            threading.Thread(target=load, daemon=True).start()
 
 
 def load() -> None:
     """Read the Start menu app list (~1s). Call once from a background thread."""
+    global _load_started
+    _load_started = True
     try:
         out = subprocess.run(
             ["powershell", "-NoProfile", "-Command",
@@ -40,9 +66,17 @@ def load() -> None:
 
 def find(spoken: str, allow_jev: bool = True) -> Optional[Tuple[str, str]]:
     """(display name, AppID) of the app the user most likely meant, or None."""
-    _loaded.wait(timeout=5)
     q = spoken.lower().strip()
-    if not q or not _apps:
+    if not q:
+        return None
+    # Check pre-seeded common system apps first for zero-latency lookup
+    if q in COMMON_APPS:
+        return COMMON_APPS[q]
+
+    ensure_load_started()
+    if not _loaded.is_set():
+        _loaded.wait(timeout=0.5)
+    if not _apps:
         return None
     if q in _apps:
         return _names[q], _apps[q]
@@ -98,22 +132,32 @@ def open_windows() -> list:
     import win32gui
     import win32process
     out = []
+    parent_pid = os.getppid() if hasattr(os, "getppid") else -1
+    my_pid = os.getpid()
 
     def add(hwnd, _):
         title = win32gui.GetWindowText(hwnd)
         if not title or not win32gui.IsWindowVisible(hwnd) or win32gui.GetWindow(hwnd, win32con.GW_OWNER):
             return
         pid = win32process.GetWindowThreadProcessId(hwnd)[1]
-        if pid == os.getpid():
+        if pid in (my_pid, parent_pid):
+            return
+        lower_title = title.lower()
+        if "computer-auto" in lower_title or lower_title.startswith("computer-auto"):
             return
         try:
             h = win32api.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
             exe = os.path.basename(win32process.GetModuleFileNameEx(h, 0)).lower()
         except Exception:
             exe = ""
+        if exe.startswith("computer-auto"):
+            return
         out.append((hwnd, title, exe))
 
-    win32gui.EnumWindows(add, None)
+    try:
+        win32gui.EnumWindows(add, None)
+    except Exception:
+        pass
     return out
 
 
@@ -133,11 +177,27 @@ PHONETIC_WINDOW_ALIASES = {
     "visual studio": "code",
     "power shell": "powershell",
     "terminal": "terminal",
+    "minima's": "minimize",
+    "minimas": "minimize",
+    "minimise": "minimize",
+    "minimised": "minimize",
+    "upset": "website",
+    "this upset": "this website",
+}
+
+CATEGORY_WINDOW_EXES = {
+    "browser": ("chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe", "vivaldi.exe"),
+    "web browser": ("chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe", "vivaldi.exe"),
+    "terminal": ("windowsterminal.exe", "cmd.exe", "powershell.exe", "wt.exe", "conhost.exe"),
+    "console": ("windowsterminal.exe", "cmd.exe", "powershell.exe", "wt.exe", "conhost.exe"),
+    "command prompt": ("cmd.exe", "windowsterminal.exe"),
+    "editor": ("notepad.exe", "code.exe"),
+    "text editor": ("notepad.exe", "code.exe"),
 }
 
 
 def find_window(spoken: str):
-    """(hwnd, title) of the open window the user named ("chrome", "the notepad"), or None."""
+    """(hwnd, title) of the open window the user named ("chrome", "the notepad", "the browser"), or None."""
     lower_spoken = spoken.lower().strip()
     for phrase, alias in PHONETIC_WINDOW_ALIASES.items():
         if phrase in lower_spoken:
@@ -152,21 +212,30 @@ def find_window(spoken: str):
         return None
 
     wins = open_windows()
-    # 1. Exact or whole-word match
+
+    # 1. Category matching (e.g. "browser", "the terminal")
+    target_phrase = " ".join(words)
+    for cat_name, exe_list in CATEGORY_WINDOW_EXES.items():
+        if cat_name in target_phrase or any(w == cat_name for w in words):
+            for hwnd, title, exe in wins:
+                if exe in exe_list or any(stem in exe for stem in [e[:-4] for e in exe_list]):
+                    return hwnd, title
+
+    # 2. Exact or whole-word match
     for hwnd, title, exe in wins:  # front-most first
         exe_stem = exe[:-4] if exe.endswith(".exe") else exe
         hay = set(re.findall(r"\w+", f"{title.lower()} {exe_stem}"))
         if all(w in hay for w in words):
             return hwnd, title
 
-    # 2. Substring match (e.g. 'terminal' in 'windowsterminal', or 'discord' in title)
+    # 3. Substring match (e.g. 'terminal' in 'windowsterminal', or 'discord' in title)
     for hwnd, title, exe in wins:
         exe_stem = exe[:-4] if exe.endswith(".exe") else exe
         combined = f"{title.lower()} {exe_stem}"
         if all(w in combined for w in words):
             return hwnd, title
 
-    # 3. Installed app index match
+    # 4. Installed app index match
     app = find(" ".join(words), allow_jev=False)
     if app:
         name = app[0].lower()

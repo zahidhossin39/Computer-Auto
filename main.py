@@ -678,8 +678,16 @@ class ComputerAutoDaemon:
 
             consecutive_waits = 0
 
-            # typing has no coordinates of its own, so compare it by its text
-            sig = (action.action, action.text) if action.action == "type" else (action.action, action.x, action.y)
+            # Action signature: accurately identify duplicates across different action types
+            if action.action == "type":
+                sig = ("type", action.text, action.x, action.y)
+            elif action.action == "hotkey":
+                sig = ("hotkey", tuple(action.keys))
+            elif action.action == "scroll":
+                sig = ("scroll", action.direction)
+            else:
+                sig = (action.action, action.x, action.y)
+
             # proposed before: it already happened or does nothing (scrolling on is fine)
             if sig in seen and action.action != "scroll":
                 print("[TIER 2 VISION]: same action had no effect, stopping.")

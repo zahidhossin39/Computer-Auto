@@ -189,8 +189,8 @@ class WindowsExecutor:
     def _get_active_window(self) -> Optional[int]:
         """Get HWND of foreground active window.
 
-        When the foreground window belongs to this process (our always-on-top
-        Control Center), walk down the z-order and return the first visible,
+        When the foreground window belongs to this process or our Tauri host
+        Control Center, walk down the z-order and return the first visible,
         titled, non-minimised window owned by another process instead.
         """
         ensure_default_desktop()
@@ -199,15 +199,37 @@ class WindowsExecutor:
         hwnd = win32gui.GetForegroundWindow()
         if not hwnd or win32process is None:
             return hwnd
-        if win32process.GetWindowThreadProcessId(hwnd)[1] != os.getpid():
+
+        parent_pid = os.getppid() if hasattr(os, "getppid") else -1
+        my_pid = os.getpid()
+
+        def _is_ours(h: int) -> bool:
+            try:
+                pid = win32process.GetWindowThreadProcessId(h)[1]
+                if pid in (my_pid, parent_pid):
+                    return True
+                text = (win32gui.GetWindowText(h) or "").lower()
+                if "computer-auto" in text:
+                    return True
+                if win32api:
+                    proc_h = win32api.OpenProcess(0x1000, False, pid)
+                    exe = os.path.basename(win32process.GetModuleFileNameEx(proc_h, 0)).lower()
+                    if exe.startswith("computer-auto"):
+                        return True
+            except Exception:
+                pass
+            return False
+
+        if not _is_ours(hwnd):
             return hwnd
+
         hwnd = win32gui.GetWindow(hwnd, win32con.GW_HWNDNEXT)
         while hwnd:
             if (
                 win32gui.IsWindowVisible(hwnd)
                 and win32gui.GetWindowText(hwnd)
                 and not win32gui.IsIconic(hwnd)
-                and win32process.GetWindowThreadProcessId(hwnd)[1] != os.getpid()
+                and not _is_ours(hwnd)
             ):
                 return hwnd
             hwnd = win32gui.GetWindow(hwnd, win32con.GW_HWNDNEXT)
@@ -349,6 +371,17 @@ class WindowsExecutor:
             elif action.type == "type_text" and action.target:
                 self._focus_target()
                 type_text(action.target)
+            elif action.type == "type_in_window" and action.target:
+                if action.args:
+                    try:
+                        self.focus_window(int(action.args[0]))
+                        time.sleep(0.12)
+                    except Exception:
+                        self._focus_target()
+                else:
+                    self._focus_target()
+                type_text(action.target)
+                return True
             elif action.type == "open_app" and action.target:
                 explorer = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "explorer.exe")
                 apps_uri = f"shell:AppsFolder\\{action.target}"

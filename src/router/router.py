@@ -34,11 +34,14 @@ class CommandRouter:
         self._jev_options["none"] = "Anything else: clicking, typing, choosing items on screen, multi-step tasks"
 
     def _normalize(self, text: str) -> str:
-        """Strip punctuation, collapse spaces, and convert to lower case."""
-        # Replace non-alphanumeric (except single spaces) with empty string
-        cleaned = re.sub(r"[^\w\s]", "", text)
+        """Strip punctuation, collapse spaces, convert to lower case, and apply phonetic fixes."""
+        cleaned = re.sub(r"[^\w\s]", "", text).lower()
+        cleaned = re.sub(r"\b(?:new debt|new dep)\b", "new tab", cleaned)
+        cleaned = re.sub(r"\b(?:not pet|not bad|note bad|not pad)\b", "notepad", cleaned)
+        cleaned = re.sub(r"\b(?:minima's|minimas|minimise|minimised)\b", "minimize", cleaned)
+        cleaned = re.sub(r"\b(?:cloud code|cloud)\b", "claude", cleaned)
         # Drop articles so "open the browser" matches the "open browser" trigger
-        return " ".join(w for w in cleaned.lower().split() if w not in ("the", "a", "an"))
+        return " ".join(w for w in cleaned.split() if w not in ("the", "a", "an"))
 
     def _build_index(self) -> None:
         """Index triggers for sub-millisecond lookup."""
@@ -117,6 +120,34 @@ class CommandRouter:
         m = re.match(r"(?:type|enter|write)\s+(.+?)\s+in\s+(?:the\s+)?(?:search\s+bar|search|address\s+bar|url\s+bar)$", clean)
         if m:
             return _make("search_in_browser", IntentAction("search_in_browser", target=_dictation(m.group(1).strip())))
+
+        # Typed into specific target window: "in notepad type hello world", "type in the notepad i'm working on it"
+        m = re.match(r"(?:in\s+(?:the\s+)?([a-zA-Z0-9_\-\s]+?)\s*,?\s*(?:type|write|dictate)\s+(.+))", clean)
+        if m:
+            win_target, text_payload = m.group(1).strip(), m.group(2).strip()
+            win = apps.find_window(win_target)
+            if win:
+                return _make("type_in_window", IntentAction("type_in_window", command=win[1], target=_dictation(text_payload), args=[str(win[0])]))
+            try:
+                known = apps.find(win_target, allow_jev=False)
+            except TypeError:
+                known = apps.find(win_target)
+            if known:
+                return _make("not_open", IntentAction("say", target=f"{win_target} is not open"))
+
+        m = re.match(r"(?:type|write|dictate)\s+(?:in|into)\s+(?:the\s+)?([a-zA-Z0-9_\-\s]+?)(?:\s+(?:the\s+(?:thing|text)(?:\s+youre\s+gonna\s+type\s+is)?|that|this|the\s+following))?\s*[:,\s]\s*(.+)", clean)
+        if m:
+            win_target, text_payload = m.group(1).strip(), m.group(2).strip()
+            win = apps.find_window(win_target)
+            if win:
+                return _make("type_in_window", IntentAction("type_in_window", command=win[1], target=_dictation(text_payload), args=[str(win[0])]))
+            try:
+                known = apps.find(win_target, allow_jev=False)
+            except TypeError:
+                known = apps.find(win_target)
+            if known:
+                return _make("not_open", IntentAction("say", target=f"{win_target} is not open"))
+
         m = re.match(r"(?:type|dictate)\s+(.+)", raw, re.I)
         if m:
             return _make("type_text", IntentAction("type_text", target=_dictation(m.group(1).strip())))
@@ -139,52 +170,62 @@ class CommandRouter:
             keys = _parse_keys(m.group(1))
             if keys:
                 return _make("press_keys", IntentAction("hotkey", keys=keys))
-        m = re.match(r"(?:switch to|go to|focus|show me|bring up)\s+(.+)$", clean)
+        # Switch to / focus / bring up / open existing window
+        m = re.match(r"(?:switch to|switch back to|go to|go back to|focus|show me|show|bring up|bring back|open(?: the)?)\s+(.+?)(?:\s+(?:that is|which is)?\s*(?:already\s+)?open(?:ed)?(?:\s+on\s+the(?:\s+screen)?)?)?$", clean)
         if m:
-            win = apps.find_window(m.group(1))
+            target = m.group(1).strip()
+            win = apps.find_window(target)
             if win:
                 return _make("focus_window", IntentAction("focus_window", target=str(win[0]), command=win[1]))
-            if m.group(1) in SITES:  # "go to youtube": no such window open, so open the site
-                return _make("open_url", IntentAction("open_url", target=SITES[m.group(1)]))
-        m = re.match(r"(?:minimize|minimise|minimized)\s+(.+)$", clean)
+            if target in SITES:  # "go to youtube": no such window open, so open the site
+                return _make("open_url", IntentAction("open_url", target=SITES[target]))
+        m = re.match(r"(?:minimize|minimise|minimized|minimas|minima's)\s+(.+)$", clean)
         if m:
             target = m.group(1).strip()
             win = apps.find_window(target)
             if win:
                 return _make("minimize_window", IntentAction("minimize_window", target=str(win[0]), command=win[1]))
-            if target not in ("window", "this", "it", "active window", "this window", "this app"):
-                try:
-                    known = apps.find(target, allow_jev=False)
-                except TypeError:
-                    known = apps.find(target)
-                if known:
-                    return _make("not_open", IntentAction("say", target=f"{target} is not open"))
+            clean_target = " ".join(w for w in target.split() if w not in ("this", "my", "that", "the", "a", "an", "window", "app"))
+            if not clean_target:
+                return _make("minimize_window", IntentAction("system_action", command="window_minimize_active"))
+            try:
+                known = apps.find(clean_target, allow_jev=False)
+            except TypeError:
+                known = apps.find(clean_target)
+            if known:
+                return _make("not_open", IntentAction("say", target=f"{clean_target} is not open"))
+
         m = re.match(r"(?:maximize|maximise|maximized)\s+(.+)$", clean)
         if m:
             target = m.group(1).strip()
             win = apps.find_window(target)
             if win:
                 return _make("maximize_window", IntentAction("maximize_window", target=str(win[0]), command=win[1]))
-            if target not in ("window", "this", "it", "active window", "this window", "this app"):
-                try:
-                    known = apps.find(target, allow_jev=False)
-                except TypeError:
-                    known = apps.find(target)
-                if known:
-                    return _make("not_open", IntentAction("say", target=f"{target} is not open"))
+            clean_target = " ".join(w for w in target.split() if w not in ("this", "my", "that", "the", "a", "an", "window", "app"))
+            if not clean_target:
+                return _make("maximize_window", IntentAction("system_action", command="window_maximize_active"))
+            try:
+                known = apps.find(clean_target, allow_jev=False)
+            except TypeError:
+                known = apps.find(clean_target)
+            if known:
+                return _make("not_open", IntentAction("say", target=f"{clean_target} is not open"))
+
         m = re.match(r"(?:restore|unmaximize|unmaximise)\s+(.+)$", clean)
         if m:
             target = m.group(1).strip()
             win = apps.find_window(target)
             if win:
                 return _make("restore_window", IntentAction("restore_window", target=str(win[0]), command=win[1]))
-            if target not in ("window", "this", "it", "active window", "this window", "this app"):
-                try:
-                    known = apps.find(target, allow_jev=False)
-                except TypeError:
-                    known = apps.find(target)
-                if known:
-                    return _make("not_open", IntentAction("say", target=f"{target} is not open"))
+            clean_target = " ".join(w for w in target.split() if w not in ("this", "my", "that", "the", "a", "an", "window", "app"))
+            if not clean_target:
+                return _make("restore_window", IntentAction("system_action", command="window_restore_active"))
+            try:
+                known = apps.find(clean_target, allow_jev=False)
+            except TypeError:
+                known = apps.find(clean_target)
+            if known:
+                return _make("not_open", IntentAction("say", target=f"{clean_target} is not open"))
         m = re.match(r"(?:close|quit|exit)\s+(.+)$", clean)
         if m and m.group(1) not in ("tab", "this tab", "window", "this", "it"):
             target = m.group(1)

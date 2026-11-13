@@ -4,13 +4,19 @@ import {
   Check,
   Cpu,
   Eye,
+  FileText,
+  Globe,
+  Layout,
   Mic,
   MicOff,
+  Minimize2,
   Radio,
+  Search,
   Send,
   ShieldAlert,
   Square,
   Terminal,
+  Volume2,
   X,
   Zap,
 } from "lucide-react";
@@ -41,52 +47,52 @@ const STATE_M3: Record<
     dot: "bg-sky-400",
     container: "bg-sky-500/10 border-sky-500/25",
     text: "text-sky-400",
-    subtitle: "Double-tap Left Ctrl or speak a voice command",
+    subtitle: "Double-tap Left Ctrl or speak a desktop voice command",
   },
   listening: {
     label: "Listening...",
     dot: "bg-emerald-400 animate-ping",
     container: "bg-emerald-500/15 border-emerald-500/40",
     text: "text-emerald-400",
-    subtitle: "I'm listening — speak clearly into your mic",
+    subtitle: "Acoustics active — speak clearly into your microphone",
   },
   processing: {
     label: "Synthesizing",
     dot: "bg-purple-400 animate-pulse",
     container: "bg-purple-500/15 border-purple-500/40",
     text: "text-purple-400",
-    subtitle: "Routing intent through neural automation pipeline",
+    subtitle: "Resolving intent through sub-millisecond neural router",
   },
   executing: {
     label: "Executing",
     dot: "bg-fuchsia-400 animate-pulse",
     container: "bg-fuchsia-500/15 border-fuchsia-500/40",
     text: "text-fuchsia-400",
-    subtitle: "Dispatched desktop action successfully",
+    subtitle: "Desktop action successfully dispatched to Windows OS",
   },
   guardrail: {
     label: "Safety Confirmation",
     dot: "bg-amber-400 animate-bounce",
     container: "bg-amber-500/15 border-amber-500/40",
     text: "text-amber-400",
-    subtitle: "Voice or click confirmation required",
+    subtitle: "Voice or click authorization required to proceed",
   },
   error: {
     label: "Attention Needed",
     dot: "bg-rose-400",
     container: "bg-rose-500/15 border-rose-500/30",
     text: "text-rose-400",
-    subtitle: "Could not execute task",
+    subtitle: "Could not execute task — check command phrasing",
   },
 };
 
 const SUGGESTED_CHIPS = [
-  { icon: "🚀", text: "Open Notepad" },
-  { icon: "🌐", text: "New Browser Tab" },
-  { icon: "🔍", text: "In search bar, type my website" },
-  { icon: "🔊", text: "Volume Up" },
-  { icon: "🪟", text: "Snap Window Left" },
-  { icon: "⚡", text: "Minimize Window" },
+  { icon: FileText, text: "Open Notepad" },
+  { icon: Globe, text: "New Browser Tab" },
+  { icon: Search, text: "In search bar, type my website" },
+  { icon: Volume2, text: "Volume Up" },
+  { icon: Layout, text: "Snap Window Left" },
+  { icon: Minimize2, text: "Minimize Window" },
 ];
 
 const EQUALIZER_WEIGHTS = [
@@ -321,17 +327,20 @@ export const StudioView: React.FC<StudioViewProps> = ({
           <span className="text-[11px] font-semibold text-slate-500 dark:text-[#938F99] mr-1 flex items-center gap-1">
             <Zap className="w-3 h-3 text-[#D0BCFF]" /> Suggested:
           </span>
-          {SUGGESTED_CHIPS.map((chip) => (
-            <button
-              key={chip.text}
-              type="button"
-              onClick={() => onRunCommand(chip.text)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-slate-200/60 dark:bg-[#2B2833] hover:bg-[#D0BCFF]/20 text-slate-700 dark:text-[#CAC4D0] hover:text-[#D0BCFF] border border-black/5 dark:border-white/5 transition-all"
-            >
-              <span>{chip.icon}</span>
-              <span>{chip.text}</span>
-            </button>
-          ))}
+          {SUGGESTED_CHIPS.map((chip) => {
+            const Icon = chip.icon;
+            return (
+              <button
+                key={chip.text}
+                type="button"
+                onClick={() => onRunCommand(chip.text)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-slate-200/60 dark:bg-[#2B2833] hover:bg-[#D0BCFF]/20 text-slate-700 dark:text-[#CAC4D0] hover:text-[#D0BCFF] border border-black/5 dark:border-white/5 transition-all"
+              >
+                <Icon className="w-3.5 h-3.5 text-[#6750A4] dark:text-[#D0BCFF]" />
+                <span>{chip.text}</span>
+              </button>
+            );
+          })}
         </div>
       </section>
 

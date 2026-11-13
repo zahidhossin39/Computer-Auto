@@ -274,6 +274,12 @@ intents:
       - "close tab"
       - "close this tab"
       - "close the tab"
+      - "close website"
+      - "close this website"
+      - "close this website only"
+      - "close the website"
+      - "close webpage"
+      - "close this webpage"
     action:
       type: hotkey
       keys: ["ctrl", "w"]

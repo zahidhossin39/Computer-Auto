@@ -1,12 +1,12 @@
-# Computer-Auto v2.1
+# Computer-Auto v2.2
 
-Voice-controlled desktop automation for Windows 10/11 combining a native **Rust + Tauri v2** desktop shell, a modern **Material Design 3 (M3)** UI with an interactive **Three.js 3D Robotic Mascot ("Nova")**, instant on-device command routing, and multimodal visual computer use.
+Voice-controlled desktop automation for Windows 10/11 combining a native **Rust + Tauri v2** desktop shell, an expressive **Material Design 3 (M3)** UI with an interactive **Three.js 3D Robotic Mascot ("Nova")**, instant on-device command routing, and multimodal visual computer use.
 
 ---
 
 ## Key Features
 
-- **Material Design 3 (M3) Interface**: Expressive Material 3 surface hierarchy, color tokens, segmented pill controls, elevated cards, and state chips designed with `@ui-ux-pro-max` and `@impeccable` guidelines.
+- **Material Design 3 (M3) Interface**: Expressive Material 3 surface hierarchy, color tokens, segmented pill controls, elevated cards, and state chips designed with `@ui-ux-pro-max` and `@impeccable` guidelines (zero emoji-as-icon anti-patterns, full Lucide SVG icons).
 - **Native Rust + Tauri v2 Desktop Shell**: Runs with zero console/terminal window (`IMAGE_SUBSYSTEM_WINDOWS_GUI`), ships as a Windows NSIS Setup Installer (`Computer-Auto-Setup.exe`) and standalone binary (`Computer-Auto.exe`), with native system tray integration and global controls.
 - **3D Robotic Mascot ("Nova") & Command Studio**: Built with **React 18, Tailwind CSS, and Three.js**, featuring:
   - Real-time 3D mascot state animations (Ready, Listening, Thinking, Working, Confirming)
@@ -16,8 +16,8 @@ Voice-controlled desktop automation for Windows 10/11 combining a native **Rust 
   - Inline **Guardrail** Confirm/Cancel approval cards
   - **1-click offline Parakeet STT model downloader** in Settings
   - Built-in **GitHub Releases self-updater** (`src/updater.py`)
-- **Robust Windows Automation & Desktop Station Attachment**: Automatic interactive desktop attachment (`OpenInputDesktop` / `WinSta0`), phonetic window resolution (e.g., "not pet" / "not bad" -> Notepad, "dis cord" -> Discord, "cloud" -> Claude, terminal stems), and dedicated address bar / search navigation.
-- **Dual-Engine Speech-to-Text**: Offline **NVIDIA Parakeet TDT 0.6B (INT8)** via `sherpa-onnx` (~0.5s CPU inference), paired with robust multimodal fallback (`google/gemini-2.5-flash` with audio payload) for zero-drop voice execution.
+- **Robust Windows Automation & Window Targeting**: Automatic interactive desktop attachment (`OpenInputDesktop` / `WinSta0`), generic window category resolution ("browser" -> Chrome/Edge/Firefox, "terminal" -> WindowsTerminal/cmd/powershell, "editor" -> Notepad/VS Code), focused in-window typing ("in notepad type <text>", "type in discord <text>"), phonetic window resolution (e.g. "not pet" / "not bad" -> Notepad, "dis cord" -> Discord, "cloud" -> Claude, "minima's" -> minimize), and dedicated address bar / search navigation.
+- **Dual-Engine Speech-to-Text**: Offline **NVIDIA Parakeet TDT 0.6B (INT8)** via `sherpa-onnx` (~0.5s CPU inference), paired with automatic multimodal acoustic fallback (`google/gemini-2.5-flash` with audio payload) for zero-drop voice execution even on soft speech.
 - **Double-Tap Left Ctrl & Continuous Mode**: Double-tap `Left Ctrl` to start speaking and double-tap again to execute, or toggle continuous listening from the HUD.
 - **Panic Key (`Esc`)**: Instant emergency abort that cancels any active mouse, keyboard, or Vision Agent execution.
 - **Hybrid Architecture (Rust + Python + OpenRouter + Sherpa-ONNX)**:
