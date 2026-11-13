@@ -25,10 +25,10 @@ interface SettingsViewProps {
 }
 
 const VISION_MODELS = [
-  "google/gemini-2.5-flash",
-  "google/gemini-2.5-pro",
-  "anthropic/claude-3.7-sonnet",
-  "openai/gpt-4o",
+  { id: "google/gemini-2.5-flash", name: "Gemini 2.5 Flash", badge: "Fastest • Multimodal" },
+  { id: "google/gemini-2.5-pro", name: "Gemini 2.5 Pro", badge: "Highest Reasoning" },
+  { id: "anthropic/claude-3.7-sonnet", name: "Claude 3.7 Sonnet", badge: "Agentic Specialist" },
+  { id: "openai/gpt-4o", name: "GPT-4o", badge: "Universal" },
 ];
 
 export const SettingsView: React.FC<SettingsViewProps> = ({
@@ -109,39 +109,47 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   return (
     <form
       onSubmit={handleSave}
-      className="flex-1 overflow-y-auto px-5 py-4 space-y-4"
+      className="flex-1 overflow-y-auto px-5 py-4 space-y-5 max-w-5xl mx-auto w-full"
     >
       {/* Toast Feedback */}
       {toast && (
-        <div className="fixed bottom-5 right-5 z-50 flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-500 text-slate-950 text-xs font-semibold shadow-xl">
+        <div className="fixed bottom-6 right-6 z-50 flex items-center gap-2.5 px-5 py-3 rounded-full bg-emerald-500 text-slate-950 text-xs font-bold shadow-2xl shadow-emerald-500/30 animate-bounce-subtle">
           <CheckCircle2 className="w-4 h-4" />
           <span>{toast}</span>
         </div>
       )}
 
-      {/* Card 1: AI & Vision */}
-      <section className="rounded-2xl glass-panel p-4 space-y-4">
+      {/* Card 1: OpenRouter API & Vision Intelligence (M3 Container) */}
+      <section className="rounded-3xl bg-slate-100/90 dark:bg-[#1F1D26] border border-black/5 dark:border-white/[0.08] p-5 space-y-4 shadow-sm">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-violet-400" />
-            <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-              AI & Vision
-            </h3>
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-full bg-[#D0BCFF]/15 flex items-center justify-center">
+              <Sparkles className="w-4 h-4 text-[#6750A4] dark:text-[#D0BCFF]" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-slate-900 dark:text-[#E6E0E9]">
+                AI Vision & Reasoning
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-[#CAC4D0]">
+                Configure OpenRouter neural models for desktop GUI automation
+              </p>
+            </div>
           </div>
+
           <span
-            className={`px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${
+            className={`px-3 py-1 rounded-full text-[11px] font-bold border ${
               settings.has_api_key
                 ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-300 border-emerald-500/30"
                 : "bg-amber-500/15 text-amber-600 dark:text-amber-300 border-amber-500/30"
             }`}
           >
-            {settings.has_api_key ? "Connected" : "Key Required"}
+            {settings.has_api_key ? "API Key Connected" : "API Key Required"}
           </span>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
           <div className="space-y-1.5">
-            <label className="text-xs font-medium text-slate-600 dark:text-slate-400 flex items-center gap-1.5">
+            <label className="text-xs font-semibold text-slate-700 dark:text-[#CAC4D0] flex items-center gap-1.5">
               <KeyRound className="w-3.5 h-3.5" />
               OpenRouter API Key
             </label>
@@ -155,12 +163,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     ? settings.masked_key || "•••••••••••• (saved)"
                     : "sk-or-v1-..."
                 }
-                className="w-full pr-9 pl-3 py-2 rounded-xl text-xs bg-slate-100/80 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
+                className="w-full pr-10 pl-3.5 py-2.5 rounded-2xl text-xs bg-slate-200/70 dark:bg-[#141218] border border-black/5 dark:border-white/10 text-slate-900 dark:text-[#E6E0E9] focus:outline-none focus:border-[#D0BCFF] focus:ring-2 focus:ring-[#D0BCFF]/30 transition-all"
               />
               <button
                 type="button"
                 onClick={() => setShowKey((s) => !s)}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200"
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 p-1 rounded-full"
               >
                 {showKey ? (
                   <EyeOff className="w-3.5 h-3.5" />
@@ -172,29 +180,29 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
 
           <div className="space-y-1.5">
-            <label className="text-xs font-medium text-slate-600 dark:text-slate-400">
+            <label className="text-xs font-semibold text-slate-700 dark:text-[#CAC4D0]">
               API Base URL
             </label>
             <input
               type="text"
               value={baseUrl}
               onChange={(e) => setBaseUrl(e.target.value)}
-              className="w-full px-3 py-2 rounded-xl text-xs bg-slate-100/80 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
+              className="w-full px-3.5 py-2.5 rounded-2xl text-xs bg-slate-200/70 dark:bg-[#141218] border border-black/5 dark:border-white/10 text-slate-900 dark:text-[#E6E0E9] focus:outline-none focus:border-[#D0BCFF] focus:ring-2 focus:ring-[#D0BCFF]/30 transition-all font-mono"
             />
           </div>
 
           <div className="space-y-1.5">
-            <label className="text-xs font-medium text-slate-600 dark:text-slate-400">
-              Vision Model
+            <label className="text-xs font-semibold text-slate-700 dark:text-[#CAC4D0]">
+              Multimodal Vision Model
             </label>
             <select
               value={visionModel}
               onChange={(e) => setVisionModel(e.target.value)}
-              className="w-full px-3 py-2 rounded-xl text-xs bg-slate-100/80 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
+              className="w-full px-3.5 py-2.5 rounded-2xl text-xs bg-slate-200/70 dark:bg-[#141218] border border-black/5 dark:border-white/10 text-slate-900 dark:text-[#E6E0E9] focus:outline-none focus:border-[#D0BCFF] focus:ring-2 focus:ring-[#D0BCFF]/30 transition-all cursor-pointer"
             >
               {VISION_MODELS.map((m) => (
-                <option key={m} value={m}>
-                  {m}
+                <option key={m.id} value={m.id}>
+                  {m.name} ({m.badge})
                 </option>
               ))}
             </select>
@@ -202,11 +210,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
-              <label className="text-xs font-medium text-slate-600 dark:text-slate-400">
-                Max Vision Steps
+              <label className="text-xs font-semibold text-slate-700 dark:text-[#CAC4D0]">
+                Max Vision Execution Steps
               </label>
-              <span className="text-xs font-mono font-semibold text-sky-500">
-                {maxSteps}
+              <span className="text-xs font-mono font-bold text-[#6750A4] dark:text-[#D0BCFF]">
+                {maxSteps} steps
               </span>
             </div>
             <input
@@ -215,48 +223,58 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               max={20}
               value={maxSteps}
               onChange={(e) => setMaxSteps(Number(e.target.value))}
-              className="w-full accent-sky-500 cursor-pointer"
+              className="w-full accent-[#6750A4] dark:accent-[#D0BCFF] cursor-pointer mt-2"
             />
           </div>
         </div>
       </section>
 
-      {/* Card 2: Voice & Speech (STT) */}
-      <section className="rounded-2xl glass-panel p-4 space-y-4">
+      {/* Card 2: Voice & Speech Engine (M3 Container) */}
+      <section className="rounded-3xl bg-slate-100/90 dark:bg-[#1F1D26] border border-black/5 dark:border-white/[0.08] p-5 space-y-4 shadow-sm">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Mic className="w-4 h-4 text-emerald-400" />
-            <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-              Voice & Speech (STT)
-            </h3>
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-full bg-emerald-500/15 flex items-center justify-center">
+              <Mic className="w-4 h-4 text-emerald-400" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-slate-900 dark:text-[#E6E0E9]">
+                Speech & Recognition Engine (STT)
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-[#CAC4D0]">
+                Choose between On-Device Fast Parakeet Neural weights or Cloud Multimodal STT
+              </p>
+            </div>
           </div>
+
           <span
-            className={`px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${
+            className={`px-3 py-1 rounded-full text-[11px] font-bold border ${
               settings.has_local_model
                 ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-300 border-emerald-500/30"
                 : "bg-slate-500/15 text-slate-600 dark:text-slate-300 border-slate-500/30"
             }`}
           >
-            {settings.has_local_model ? "Parakeet Ready" : "Not Downloaded"}
+            {settings.has_local_model ? "Local Weights Ready" : "Local Model Missing"}
           </span>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 items-end">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-end pt-1">
           <div className="space-y-1.5">
-            <label className="text-xs font-medium text-slate-600 dark:text-slate-400">
-              Voice Engine
+            <label className="text-xs font-semibold text-slate-700 dark:text-[#CAC4D0]">
+              Speech Engine Mode
             </label>
             <select
               value={sttEngine}
               onChange={(e) =>
                 setSttEngine(e.target.value as "parakeet" | "cloud")
               }
-              className="w-full px-3 py-2 rounded-xl text-xs bg-slate-100/80 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
+              className="w-full px-3.5 py-2.5 rounded-2xl text-xs bg-slate-200/70 dark:bg-[#141218] border border-black/5 dark:border-white/10 text-slate-900 dark:text-[#E6E0E9] focus:outline-none focus:border-[#D0BCFF] focus:ring-2 focus:ring-[#D0BCFF]/30 transition-all cursor-pointer"
             >
               <option value="parakeet">
-                On-Device Parakeet INT8 + Cloud Fallback
+                ⚡ On-Device Parakeet INT8 + Cloud Fallback
               </option>
-              <option value="cloud">Cloud Gemini 2.5 Flash Audio</option>
+              <option value="cloud">
+                ☁️ Cloud Gemini 2.5 Flash Speech (High Accuracy)
+              </option>
             </select>
           </div>
 
@@ -265,22 +283,22 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <button
                 type="button"
                 onClick={onCancelDownload}
-                className="flex-1 flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-rose-500/15 hover:bg-rose-500 text-rose-500 hover:text-white border border-rose-500/30 transition-all"
+                className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-full text-xs font-bold bg-rose-500/15 hover:bg-rose-500 text-rose-500 hover:text-white border border-rose-500/30 transition-all"
               >
-                <XCircle className="w-3.5 h-3.5" />
+                <XCircle className="w-4 h-4" />
                 <span>Cancel Download ({downloadPct}%)</span>
               </button>
             ) : (
               <button
                 type="button"
                 onClick={onDownloadModel}
-                className="flex-1 flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-emerald-500/15 hover:bg-emerald-500 text-emerald-600 dark:text-emerald-300 hover:text-slate-950 border border-emerald-500/30 transition-all"
+                className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-full text-xs font-bold bg-[#D0BCFF]/15 hover:bg-[#D0BCFF] text-[#6750A4] dark:text-[#D0BCFF] hover:text-[#381E72] border border-[#D0BCFF]/30 transition-all shadow-sm"
               >
-                <Download className="w-3.5 h-3.5" />
+                <Download className="w-4 h-4" />
                 <span>
                   {settings.has_local_model
-                    ? "Re-download Offline Model"
-                    : "Download Offline Model"}
+                    ? "Re-download Offline Model (~600MB)"
+                    : "Download Offline Model (~600MB)"}
                 </span>
               </button>
             )}
@@ -288,14 +306,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </div>
 
         {downloadProgress.active && (
-          <div className="space-y-1.5">
-            <div className="flex justify-between text-[11px] font-mono text-slate-500 dark:text-slate-400">
-              <span>{downloadProgress.stage || "Downloading..."}</span>
+          <div className="space-y-1.5 pt-1">
+            <div className="flex justify-between text-[11px] font-mono text-slate-500 dark:text-[#CAC4D0]">
+              <span>{downloadProgress.stage || "Downloading neural weights..."}</span>
               <span>{downloadPct}%</span>
             </div>
-            <div className="h-2 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
+            <div className="h-2 rounded-full bg-slate-200 dark:bg-[#141218] overflow-hidden">
               <div
-                className="h-full bg-gradient-to-r from-emerald-500 to-sky-500 transition-all duration-200"
+                className="h-full bg-gradient-to-r from-emerald-500 to-[#D0BCFF] transition-all duration-300"
                 style={{ width: `${downloadPct}%` }}
               />
             </div>
@@ -303,15 +321,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         )}
       </section>
 
-      {/* Card 3: App & Updates */}
-      <section className="rounded-2xl glass-panel p-4 space-y-4">
+      {/* Card 3: App Experience & Updates (M3 Container) */}
+      <section className="rounded-3xl bg-slate-100/90 dark:bg-[#1F1D26] border border-black/5 dark:border-white/[0.08] p-5 space-y-4 shadow-sm">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div>
-            <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-              App & Updates
+            <h3 className="text-sm font-bold text-slate-900 dark:text-[#E6E0E9]">
+              Application Experience & Updates
             </h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              Current version: v{settings.app_version || "2.0.0"}
+            <p className="text-xs text-slate-500 dark:text-[#CAC4D0]">
+              Installed version: v{settings.app_version || "2.1.0"}
             </p>
           </div>
 
@@ -320,9 +338,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <button
                 type="button"
                 onClick={onInstallUpdate}
-                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-sky-500 hover:bg-sky-400 text-white transition-colors"
+                className="flex items-center gap-2 px-4 py-2 rounded-full text-xs font-bold bg-[#6750A4] dark:bg-[#D0BCFF] text-white dark:text-[#381E72] shadow-sm transition-all"
               >
-                <Download className="w-3.5 h-3.5" />
+                <Download className="w-4 h-4" />
                 <span>Install Update ({updateStatus.version})</span>
               </button>
             ) : (
@@ -330,16 +348,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 type="button"
                 onClick={onCheckUpdate}
                 disabled={updateStatus.status === "checking"}
-                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 transition-colors"
+                className="flex items-center gap-2 px-4 py-2 rounded-full text-xs font-semibold bg-slate-200/70 dark:bg-[#2B2833] hover:bg-slate-300 dark:hover:bg-[#36333F] text-slate-800 dark:text-[#E6E0E9] border border-black/5 dark:border-white/5 transition-all"
               >
                 <RefreshCw
                   className={`w-3.5 h-3.5 ${
-                    updateStatus.status === "checking" ? "animate-spin" : ""
+                    updateStatus.status === "checking" ? "animate-spin text-[#D0BCFF]" : ""
                   }`}
                 />
                 <span>
                   {updateStatus.status === "checking"
-                    ? "Checking..."
+                    ? "Checking GitHub..."
                     : updateStatus.status === "up_to_date"
                     ? "Up to Date"
                     : "Check for Updates"}
@@ -349,28 +367,38 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-          <label className="flex items-center justify-between p-3 rounded-xl bg-slate-100/70 dark:bg-slate-950/60 border border-slate-200/70 dark:border-slate-800 cursor-pointer">
-            <span className="text-xs font-medium text-slate-700 dark:text-slate-300">
-              Always-on-Top Window
-            </span>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 pt-1">
+          <label className="flex items-center justify-between p-4 rounded-2xl bg-slate-200/60 dark:bg-[#141218] border border-black/5 dark:border-white/5 cursor-pointer hover:border-[#D0BCFF]/30 transition-all">
+            <div className="space-y-0.5">
+              <span className="text-xs font-semibold text-slate-800 dark:text-[#E6E0E9]">
+                Always-on-Top Mode
+              </span>
+              <p className="text-[11px] text-slate-500 dark:text-[#938F99]">
+                Keep Nova window visible above active desktop apps
+              </p>
+            </div>
             <input
               type="checkbox"
               checked={alwaysOnTop}
               onChange={(e) => setAlwaysOnTop(e.target.checked)}
-              className="w-4 h-4 accent-sky-500 rounded cursor-pointer"
+              className="w-4 h-4 accent-[#6750A4] dark:accent-[#D0BCFF] rounded cursor-pointer ml-3"
             />
           </label>
 
-          <label className="flex items-center justify-between p-3 rounded-xl bg-slate-100/70 dark:bg-slate-950/60 border border-slate-200/70 dark:border-slate-800 cursor-pointer">
-            <span className="text-xs font-medium text-slate-700 dark:text-slate-300">
-              JEV Voice Feedback
-            </span>
+          <label className="flex items-center justify-between p-4 rounded-2xl bg-slate-200/60 dark:bg-[#141218] border border-black/5 dark:border-white/5 cursor-pointer hover:border-[#D0BCFF]/30 transition-all">
+            <div className="space-y-0.5">
+              <span className="text-xs font-semibold text-slate-800 dark:text-[#E6E0E9]">
+                JEV Semantic Routing
+              </span>
+              <p className="text-[11px] text-slate-500 dark:text-[#938F99]">
+                Use smart language model to parse natural paraphrases
+              </p>
+            </div>
             <input
               type="checkbox"
               checked={useJev}
               onChange={(e) => setUseJev(e.target.checked)}
-              className="w-4 h-4 accent-sky-500 rounded cursor-pointer"
+              className="w-4 h-4 accent-[#6750A4] dark:accent-[#D0BCFF] rounded cursor-pointer ml-3"
             />
           </label>
         </div>
@@ -380,15 +408,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         )}
       </section>
 
-      {/* Save Button */}
-      <div className="flex justify-end pb-2">
+      {/* Floating Save Button */}
+      <div className="flex justify-end pb-4 pt-1">
         <button
           type="submit"
           disabled={saving}
-          className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-semibold bg-gradient-to-r from-sky-500 to-violet-600 hover:from-sky-400 hover:to-violet-500 text-white shadow-lg shadow-sky-500/20 transition-all disabled:opacity-50"
+          className="flex items-center gap-2 px-6 py-3 rounded-full text-xs font-bold bg-[#6750A4] dark:bg-[#D0BCFF] text-white dark:text-[#381E72] hover:brightness-110 shadow-lg shadow-purple-500/25 transition-all disabled:opacity-50"
         >
           <Save className="w-4 h-4" />
-          <span>{saving ? "Saving..." : "Save Settings"}</span>
+          <span>{saving ? "Saving Changes..." : "Save Settings"}</span>
         </button>
       </div>
     </form>

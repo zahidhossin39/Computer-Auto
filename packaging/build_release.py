@@ -132,7 +132,11 @@ def build_tauri() -> tuple[Path | None, Path]:
     if not standalone_exe.is_file():
         raise FileNotFoundError(f"Expected Tauri GUI binary at {standalone_exe}")
 
-    setup_candidates = sorted(NSIS_BUNDLE_DIR.glob("*-setup.exe")) if NSIS_BUNDLE_DIR.is_dir() else []
+    setup_candidates = (
+        sorted(NSIS_BUNDLE_DIR.glob("*-setup.exe"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if NSIS_BUNDLE_DIR.is_dir()
+        else []
+    )
     setup_exe = setup_candidates[0] if setup_candidates else None
     return setup_exe, standalone_exe
 
@@ -278,7 +282,11 @@ def main() -> None:
         build_frontend()
         setup_exe, standalone_exe = build_tauri()
     else:
-        setup_candidates = sorted(NSIS_BUNDLE_DIR.glob("*-setup.exe")) if NSIS_BUNDLE_DIR.is_dir() else []
+        setup_candidates = (
+            sorted(NSIS_BUNDLE_DIR.glob("*-setup.exe"), key=lambda p: p.stat().st_mtime, reverse=True)
+            if NSIS_BUNDLE_DIR.is_dir()
+            else []
+        )
         setup_exe = setup_candidates[0] if setup_candidates else None
         standalone_exe = TAURI_RELEASE_DIR / STANDALONE_EXE_NAME
 

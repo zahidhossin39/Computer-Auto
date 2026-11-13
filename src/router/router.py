@@ -111,6 +111,12 @@ class CommandRouter:
 
     def _slot_intent(self, raw: str, clean: str) -> Optional[Intent]:
         """Deterministic argument commands; None lets Jev and vision handle the rest."""
+        m = re.match(r"(?:in\s+(?:the\s+)?(?:search\s+bar|search|address\s+bar|url\s+bar)\s*,?\s*(?:type|enter|search for|write)\s+(.+))", clean)
+        if m:
+            return _make("search_in_browser", IntentAction("search_in_browser", target=_dictation(m.group(1).strip())))
+        m = re.match(r"(?:type|enter|write)\s+(.+?)\s+in\s+(?:the\s+)?(?:search\s+bar|search|address\s+bar|url\s+bar)$", clean)
+        if m:
+            return _make("search_in_browser", IntentAction("search_in_browser", target=_dictation(m.group(1).strip())))
         m = re.match(r"(?:type|dictate)\s+(.+)", raw, re.I)
         if m:
             return _make("type_text", IntentAction("type_text", target=_dictation(m.group(1).strip())))
@@ -142,26 +148,50 @@ class CommandRouter:
                 return _make("open_url", IntentAction("open_url", target=SITES[m.group(1)]))
         m = re.match(r"(?:minimize|minimise|minimized)\s+(.+)$", clean)
         if m:
-            win = apps.find_window(m.group(1))
+            target = m.group(1).strip()
+            win = apps.find_window(target)
             if win:
                 return _make("minimize_window", IntentAction("minimize_window", target=str(win[0]), command=win[1]))
+            if target not in ("window", "this", "it", "active window", "this window", "this app"):
+                try:
+                    known = apps.find(target, allow_jev=False)
+                except TypeError:
+                    known = apps.find(target)
+                if known:
+                    return _make("not_open", IntentAction("say", target=f"{target} is not open"))
         m = re.match(r"(?:maximize|maximise|maximized)\s+(.+)$", clean)
         if m:
-            win = apps.find_window(m.group(1))
+            target = m.group(1).strip()
+            win = apps.find_window(target)
             if win:
                 return _make("maximize_window", IntentAction("maximize_window", target=str(win[0]), command=win[1]))
+            if target not in ("window", "this", "it", "active window", "this window", "this app"):
+                try:
+                    known = apps.find(target, allow_jev=False)
+                except TypeError:
+                    known = apps.find(target)
+                if known:
+                    return _make("not_open", IntentAction("say", target=f"{target} is not open"))
         m = re.match(r"(?:restore|unmaximize|unmaximise)\s+(.+)$", clean)
         if m:
-            win = apps.find_window(m.group(1))
+            target = m.group(1).strip()
+            win = apps.find_window(target)
             if win:
                 return _make("restore_window", IntentAction("restore_window", target=str(win[0]), command=win[1]))
+            if target not in ("window", "this", "it", "active window", "this window", "this app"):
+                try:
+                    known = apps.find(target, allow_jev=False)
+                except TypeError:
+                    known = apps.find(target)
+                if known:
+                    return _make("not_open", IntentAction("say", target=f"{target} is not open"))
         m = re.match(r"(?:close|quit|exit)\s+(.+)$", clean)
         if m and m.group(1) not in ("tab", "this tab", "window", "this", "it"):
             target = m.group(1)
             win = apps.find_window(target)
             if win:
                 intent = _make("close_window", IntentAction("close_window", target=str(win[0]), command=win[1]))
-                intent.is_destructive = True  # same as "close window": ask before closing
+                intent.is_destructive = False
                 return intent
             # Only say "<target> is not open" if target is a known installed app;
             # UI targets like "close popup", "close sidebar", "exit fullscreen" fall through to Vision.

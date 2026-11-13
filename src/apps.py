@@ -69,8 +69,29 @@ def find(spoken: str, allow_jev: bool = True) -> Optional[Tuple[str, str]]:
     return None
 
 
+def ensure_desktop_attached() -> None:
+    """Ensure current thread is attached to the user's interactive desktop station."""
+    import sys
+    if sys.platform != "win32":
+        return
+    import ctypes
+    try:
+        user32 = ctypes.windll.user32
+        hdesk = user32.OpenInputDesktop(0, False, 0x01FF)
+        if not hdesk:
+            hwinsta = user32.OpenWindowStationW("WinSta0", False, 0x01FF)
+            if hwinsta:
+                user32.SetProcessWindowStation(hwinsta)
+            hdesk = user32.OpenDesktopW("Default", 0, False, 0x01FF)
+        if hdesk:
+            user32.SetThreadDesktop(hdesk)
+    except Exception:
+        pass
+
+
 def open_windows() -> list:
     """(hwnd, title, exe name) of visible top-level windows, front-most first, minus ours."""
+    ensure_desktop_attached()
     import os
     import win32api
     import win32con
@@ -96,17 +117,56 @@ def open_windows() -> list:
     return out
 
 
+PHONETIC_WINDOW_ALIASES = {
+    "not pet": "notepad",
+    "not bad": "notepad",
+    "note bad": "notepad",
+    "not pad": "notepad",
+    "cloud": "claude",
+    "cloud code": "claude",
+    "dis cord": "discord",
+    "dis chord": "discord",
+    "spot ify": "spotify",
+    "fire fox": "firefox",
+    "vs code": "code",
+    "visual studio code": "code",
+    "visual studio": "code",
+    "power shell": "powershell",
+    "terminal": "terminal",
+}
+
+
 def find_window(spoken: str):
     """(hwnd, title) of the open window the user named ("chrome", "the notepad"), or None."""
-    words = [w for w in spoken.lower().split() if w not in ("the", "my", "a", "this", "that", "it", "window", "app")]
+    lower_spoken = spoken.lower().strip()
+    for phrase, alias in PHONETIC_WINDOW_ALIASES.items():
+        if phrase in lower_spoken:
+            lower_spoken = lower_spoken.replace(phrase, alias)
+
+    words = [w for w in lower_spoken.split() if w not in ("the", "my", "a", "this", "that", "it", "window", "app")]
     if not words:
+        # If user explicitly said "this window" or "this app" or "active window"
+        wins = open_windows()
+        if wins:
+            return wins[0][0], wins[0][1]
         return None
+
     wins = open_windows()
-    for hwnd, title, exe in wins:  # front-most first, so "chrome" means the Chrome you last used
-        hay = set(re.findall(r"\w+", f"{title.lower()} {exe[:-4]}"))  # whole words: "mail" != "gmail"
+    # 1. Exact or whole-word match
+    for hwnd, title, exe in wins:  # front-most first
+        exe_stem = exe[:-4] if exe.endswith(".exe") else exe
+        hay = set(re.findall(r"\w+", f"{title.lower()} {exe_stem}"))
         if all(w in hay for w in words):
             return hwnd, title
-    # "note pad", "vs code": resolve through the app index, then match its name (no Jev call)
+
+    # 2. Substring match (e.g. 'terminal' in 'windowsterminal', or 'discord' in title)
+    for hwnd, title, exe in wins:
+        exe_stem = exe[:-4] if exe.endswith(".exe") else exe
+        combined = f"{title.lower()} {exe_stem}"
+        if all(w in combined for w in words):
+            return hwnd, title
+
+    # 3. Installed app index match
     app = find(" ".join(words), allow_jev=False)
     if app:
         name = app[0].lower()

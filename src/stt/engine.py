@@ -102,7 +102,8 @@ class SpeechRecognizer:
             self._recognizer = None
 
     def _transcribe_cloud(self, samples: np.ndarray, sample_rate: int = 16000) -> str:
-        """OpenRouter's transcription endpoint; "" on any failure so Parakeet takes over."""
+        """Transcribe speech audio via OpenRouter API with multimodal fallback."""
+        import base64
         import requests
         key = os.environ.get("OPENROUTER_API_KEY", "").strip()
         if not key:
@@ -115,20 +116,77 @@ class SpeechRecognizer:
                 wf.setsampwidth(2)
                 wf.setframerate(sample_rate)
                 wf.writeframes((np.clip(samples, -1.0, 1.0) * 32767).astype(np.int16).tobytes())
-            r = requests.post(
-                TRANSCRIBE_URL,
-                headers={"Authorization": f"Bearer {key}"},
-                data={"model": model, "prompt": VOCAB_HINT},
-                files={"file": ("command.wav", buf.getvalue(), "audio/wav")},
-                timeout=15,
-            )
-            r.raise_for_status()
-            text = str(r.json().get("text", "")).strip().strip("\"'").rstrip(".?!,:;\"'").strip().lower()
-            if text:
-                print(f'[STT CLOUD]: "{text}" ({model})')
-            else:
-                print(f"[STT CLOUD]: no words recognised ({model})")
-            return text
+            wav_bytes = buf.getvalue()
+
+            # 1. Standard audio/transcriptions endpoint (tested contract & whisper-compatible)
+            try:
+                r = requests.post(
+                    TRANSCRIBE_URL,
+                    headers={"Authorization": f"Bearer {key}"},
+                    data={"model": model, "prompt": VOCAB_HINT},
+                    files={"file": ("command.wav", wav_bytes, "audio/wav")},
+                    timeout=15,
+                )
+                r.raise_for_status()
+                text = str(r.json().get("text", "")).strip().strip("\"'").rstrip(".?!,:;\"'").strip().lower()
+                if text:
+                    print(f'[STT CLOUD]: "{text}" ({model})')
+                    return text
+            except Exception as e_std:
+                # If OpenRouter returns 400 (e.g. Model google/gemini-2.5-flash does not exist on transcription endpoint),
+                # use chat/completions with input_audio which Gemini natively supports.
+                pass
+
+            # 2. Multimodal chat/completions with input_audio fallback (Gemini / GPT-4o)
+            try:
+                b64_audio = base64.b64encode(wav_bytes).decode("ascii")
+                payload = {
+                    "model": model,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": (
+                                        "You are an accurate, fast speech transcriber for computer desktop voice commands. "
+                                        "Listen to this audio clip and transcribe the spoken words into lowercase English text. "
+                                        "Spelling hints: Claude, Chrome, Discord, VS Code, Notepad, Explorer, Terminal, "
+                                        "PowerShell, Spotify, Slack, Teams, Settings, Calculator, new tab, close tab, "
+                                        "close window, minimize, maximize, restore, switch to, YouTube, Gmail, GitHub. "
+                                        "Respond ONLY with the transcribed words. No punctuation, no markdown, no quotes. "
+                                        "If the audio is silent or unintelligible noise, respond with an empty string."
+                                    ),
+                                },
+                                {
+                                    "type": "input_audio",
+                                    "input_audio": {"data": b64_audio, "format": "wav"},
+                                },
+                            ],
+                        }
+                    ],
+                    "temperature": 0.0,
+                }
+                r2 = requests.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                    json=payload,
+                    timeout=15,
+                )
+                if r2.status_code == 200:
+                    choices = r2.json().get("choices", [])
+                    if choices:
+                        raw = choices[0].get("message", {}).get("content", "")
+                        lower = raw.strip().lower().strip("\"'").rstrip(".?!,:;\"'").strip()
+                        if any(phrase in lower for phrase in ("cannot transcribe", "audio is silent", "no speech detected", "sorry, i cannot")):
+                            return ""
+                        if lower:
+                            print(f'[STT CLOUD]: "{lower}" ({model})')
+                            return lower
+            except Exception:
+                pass
+
+            return ""
         except Exception as e:
             print(f"[STT CLOUD]: cloud transcription failed ({e})")
             return ""

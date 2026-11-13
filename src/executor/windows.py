@@ -15,14 +15,19 @@ from src.trigger import hotkey
 def ensure_default_desktop() -> None:
     """Ensure current thread is attached to the user's interactive 'Default' desktop.
     Fixes spawned GUI processes rendering into isolated virtual desktops (e.g. exebox-*)
-    when executed from integrated IDE terminals.
+    when executed from integrated IDE terminals or background services.
     """
     if sys.platform == "win32":
         try:
             user32 = ctypes.windll.user32
-            hDesk = user32.OpenDesktopW("Default", 0, False, 0x01FF)
-            if hDesk:
-                user32.SetThreadDesktop(hDesk)
+            hdesk = user32.OpenInputDesktop(0, False, 0x01FF)
+            if not hdesk:
+                hwinsta = user32.OpenWindowStationW("WinSta0", False, 0x01FF)
+                if hwinsta:
+                    user32.SetProcessWindowStation(hwinsta)
+                hdesk = user32.OpenDesktopW("Default", 0, False, 0x01FF)
+            if hdesk:
+                user32.SetThreadDesktop(hdesk)
         except Exception:
             pass
 
@@ -188,6 +193,7 @@ class WindowsExecutor:
         Control Center), walk down the z-order and return the first visible,
         titled, non-minimised window owned by another process instead.
         """
+        ensure_default_desktop()
         if win32gui is None:
             return None
         hwnd = win32gui.GetForegroundWindow()
@@ -377,6 +383,14 @@ class WindowsExecutor:
                 if win32gui is None or win32con is None:
                     return False
                 win32gui.PostMessage(int(action.target), win32con.WM_CLOSE, 0, 0)
+            elif action.type == "search_in_browser" and action.target:
+                self._focus_target()
+                send_hotkey("ctrl", "l")
+                time.sleep(0.12)
+                type_text(action.target)
+                time.sleep(0.05)
+                send_hotkey("enter")
+                return True
             elif action.type == "open_url" and action.target:
                 if not action.target.lower().startswith(("http://", "https://")):
                     return False  # ShellExecute would run a local path or program

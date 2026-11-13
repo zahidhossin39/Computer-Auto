@@ -179,3 +179,16 @@ def test_sites_files_and_dictation(router, monkeypatch):
     assert "search_query=lofi+music" in router.route("search youtube for lofi music").intent.action.target
     assert "q=cats" in router.route("search the web for cats").intent.action.target
     assert router.route("type hello comma world new line bye").intent.action.target == "hello, world\nbye"
+
+
+def test_search_bar_typing_slot_intent(router):
+    r1 = router.route("in the search bar, type my website")
+    assert r1.is_vision is False
+    assert r1.intent.name == "search_in_browser"
+    assert r1.intent.action.type == "search_in_browser"
+    assert r1.intent.action.target == "my website"
+
+    r2 = router.route("type github in the address bar")
+    assert r2.is_vision is False
+    assert r2.intent.name == "search_in_browser"
+    assert r2.intent.action.target == "github"

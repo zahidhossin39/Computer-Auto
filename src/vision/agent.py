@@ -325,7 +325,7 @@ class VisionAgent:
                 field = next((e for e in elements if e.kind in ("Document", "Edit")), None)
                 if field:
                     x, y = field.center
-            elif act in ("click", "double_click", "right_click") and data.get("target"):
+            elif act in ("click", "double_click", "right_click", "type") and data.get("target"):
                 x, y = self._locate(data["target"], image, crop_size, cancel_event=cancel_event)
                 x, y = x + box[0] + origin[0], y + box[1] + origin[1]  # crop -> global screen coordinates
             return VisionAction(
@@ -392,8 +392,10 @@ class VisionAgent:
             elif action.action == "type" and action.text:
                 if action.x is not None and action.y is not None:
                     pyautogui.click(action.x, action.y)  # focus the field first
+                    time.sleep(0.15)
                 type_text(action.text)
                 if action.submit:
+                    time.sleep(0.05)
                     send_hotkey("enter")
                 return True
             elif action.action == "hotkey" and action.keys:
