@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import re
 from typing import Dict, List, Optional
 from urllib.parse import quote_plus
-from src import apps, jev
+from src import apps, jev, learned
 from src.config import Intent, IntentAction
 
 # Maximum words allowed around a contained trigger for a containment match.
@@ -32,6 +32,7 @@ class RouteResult:
     is_vision: bool
     command: str
     intent: Optional[Intent] = None
+    route: str = "keyword"
 
 
 class CommandRouter:
@@ -86,13 +87,28 @@ class CommandRouter:
                 is_vision=False,
                 command=utterance.strip(),
                 intent=self._trigger_map[clean_text],
+                route="keyword",
             )
         if polite_clean in self._trigger_map:
             return RouteResult(
                 is_vision=False,
                 command=utterance.strip(),
                 intent=self._trigger_map[polite_clean],
+                route="keyword",
             )
+
+        # 1b. Learned commands tier (exact + fuzzy trigger match from user/MCP-learned palette)
+        try:
+            matched_learned = learned.match(utterance.strip())
+            if matched_learned is not None:
+                return RouteResult(
+                    is_vision=False,
+                    command=utterance.strip(),
+                    intent=learned.to_intent(matched_learned),
+                    route="learned",
+                )
+        except Exception:
+            pass
 
         # 2. Deterministic argument / slot commands: open <profile/gmail>, open <app>, type <text>,
         #    go to <site>, minimize/maximize/focus <window>. Runs before fuzzy containment so
@@ -101,7 +117,7 @@ class CommandRouter:
         if not slot and polite_clean != clean_text:
             slot = self._slot_intent(utterance.strip(), polite_clean)
         if slot:
-            return RouteResult(is_vision=False, command=utterance.strip(), intent=slot)
+            return RouteResult(is_vision=False, command=utterance.strip(), intent=slot, route="slot")
 
         # 3. Key phrase containment match (ordered by longest trigger first).
         # Only counts for short utterances: after removing the matched
@@ -118,6 +134,7 @@ class CommandRouter:
                         is_vision=False,
                         command=utterance.strip(),
                         intent=self._trigger_map[trigger],
+                        route="keyword",
                     )
 
         # 4. Jev decision model: understands paraphrases and natural intent ("make it louder",
@@ -125,10 +142,12 @@ class CommandRouter:
         if self.use_jev:
             jev_intent = self._jev_route(utterance.strip(), clean_text)
             if jev_intent is not None:
+                jev_route_label = "learned" if getattr(jev_intent, "category", "") == "learned" else "jev"
                 return RouteResult(
                     is_vision=False,
                     command=utterance.strip(),
                     intent=jev_intent,
+                    route=jev_route_label,
                 )
 
         # 5. Fallback to Tier 2 Vision Agent
@@ -136,6 +155,7 @@ class CommandRouter:
             is_vision=True,
             command=utterance.strip(),
             intent=None,
+            route="vision",
         )
 
     def _jev_route(self, raw: str, clean: str = "") -> Optional[Intent]:
@@ -180,6 +200,22 @@ class CommandRouter:
             if app_key not in static_app_keys and len(options) < 252:
                 options[f"open_app:{app_key}"] = f"Open / launch / switch to {disp} application"
 
+        learned_by_key: Dict[str, Dict] = {}
+        try:
+            for lcmd in learned.list_commands(include_disabled=False):
+                cid = str(lcmd.get("id") or lcmd.get("name") or "").strip()
+                cname = str(lcmd.get("name") or cid).strip()
+                if cid and len(options) < 254:
+                    trigs = "; ".join(str(t) for t in (lcmd.get("triggers") or [])[:4])
+                    desc = str(lcmd.get("description") or cname).strip()
+                    key = f"learned:{cid}"
+                    options[key] = f"{desc} ({trigs})" if trigs else desc
+                    learned_by_key[key] = lcmd
+                    learned_by_key[cid] = lcmd
+                    learned_by_key[cname] = lcmd
+        except Exception:
+            pass
+
         picked = jev.choose(
             {"spoken_command": raw},
             "Which desktop action does this spoken command ask for? The text comes from "
@@ -192,6 +228,11 @@ class CommandRouter:
             return None
 
         choice = picked[0]
+        if choice in learned_by_key:
+            try:
+                return learned.to_intent(learned_by_key[choice])
+            except Exception:
+                return None
         if choice in self._intents_by_name:
             return self._intents_by_name[choice]
         if choice.startswith("chrome_gmail:"):
