@@ -1,8 +1,9 @@
 pub mod engine;
 
 use engine::{
-    check_update_impl, install_update_impl, load_and_sync_settings, run_openrouter_fallback,
-    save_settings_to_disk, try_native_command, AppSettings, SidecarBridge, APP_VERSION,
+    check_update_impl, install_update_impl, list_models_impl, load_and_sync_settings,
+    run_openrouter_fallback, save_settings_to_disk, test_connection_impl, try_native_command,
+    AppSettings, SidecarBridge, APP_VERSION,
 };
 use serde_json::{json, Value};
 use std::sync::Mutex;
@@ -302,6 +303,149 @@ fn cancel_download(app: AppHandle, state: State<'_, AppState>) -> Result<Value, 
 }
 
 #[tauri::command]
+fn list_models(
+    state: State<'_, AppState>,
+    base_url: Option<String>,
+    api_key: Option<String>,
+) -> Result<Value, String> {
+    let (saved_base, saved_key) = {
+        let s = state.settings.lock().map_err(|_| "Settings lock error")?;
+        (s.vision_api_base.clone(), s.vision_api_key.clone())
+    };
+    let effective_base = base_url
+        .filter(|b| !b.trim().is_empty())
+        .unwrap_or(saved_base);
+    let effective_key = api_key
+        .filter(|k| !k.trim().is_empty())
+        .unwrap_or(saved_key);
+    list_models_impl(&effective_base, &effective_key)
+}
+
+#[tauri::command]
+fn test_connection(
+    state: State<'_, AppState>,
+    base_url: Option<String>,
+    api_key: Option<String>,
+    model: Option<String>,
+) -> Result<Value, String> {
+    let (saved_base, saved_key, saved_model) = {
+        let s = state.settings.lock().map_err(|_| "Settings lock error")?;
+        (
+            s.vision_api_base.clone(),
+            s.vision_api_key.clone(),
+            s.vision_model.clone(),
+        )
+    };
+    let effective_base = base_url
+        .filter(|b| !b.trim().is_empty())
+        .unwrap_or(saved_base);
+    let effective_key = api_key
+        .filter(|k| !k.trim().is_empty())
+        .unwrap_or(saved_key);
+    let effective_model = model
+        .filter(|m| !m.trim().is_empty())
+        .unwrap_or(saved_model);
+    test_connection_impl(&effective_base, &effective_key, &effective_model)
+}
+
+#[tauri::command]
+fn remove_queued(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<Value, String> {
+    send_or_fallback(
+        &app,
+        &state,
+        json!({ "cmd": "remove_queued", "id": id }),
+        || Ok(json!({ "ok": true })),
+    )
+}
+
+#[tauri::command]
+fn clear_queue(app: AppHandle, state: State<'_, AppState>) -> Result<Value, String> {
+    send_or_fallback(
+        &app,
+        &state,
+        json!({ "cmd": "clear_queue" }),
+        || {
+            emit_bridge(&app, json!({ "event": "queue", "pending": [], "running": Value::Null }));
+            Ok(json!({ "ok": true }))
+        },
+    )
+}
+
+#[tauri::command]
+fn list_learned(app: AppHandle, state: State<'_, AppState>) -> Result<Value, String> {
+    send_or_fallback(
+        &app,
+        &state,
+        json!({ "cmd": "list_learned" }),
+        || {
+            emit_bridge(&app, json!({ "event": "learned", "data": [] }));
+            Ok(json!({ "ok": true }))
+        },
+    )
+}
+
+#[tauri::command]
+fn approve_learned(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<Value, String> {
+    send_or_fallback(
+        &app,
+        &state,
+        json!({ "cmd": "approve_learned", "id": id }),
+        || Ok(json!({ "ok": true })),
+    )
+}
+
+#[tauri::command]
+fn toggle_learned(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    enabled: bool,
+) -> Result<Value, String> {
+    send_or_fallback(
+        &app,
+        &state,
+        json!({ "cmd": "toggle_learned", "id": id, "enabled": enabled }),
+        || Ok(json!({ "ok": true })),
+    )
+}
+
+#[tauri::command]
+fn delete_learned(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<Value, String> {
+    send_or_fallback(
+        &app,
+        &state,
+        json!({ "cmd": "delete_learned", "id": id }),
+        || Ok(json!({ "ok": true })),
+    )
+}
+
+#[tauri::command]
+fn get_mcp_config(app: AppHandle, state: State<'_, AppState>) -> Result<Value, String> {
+    send_or_fallback(
+        &app,
+        &state,
+        json!({ "cmd": "get_mcp_config" }),
+        || {
+            let root = engine::locate_bridge_root()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|| ".".to_string());
+            let snippet = serde_json::to_string_pretty(&json!({
+                "mcpServers": {
+                    "computer-auto": {
+                        "command": "python",
+                        "args": ["-m", "src.mcp_server"],
+                        "cwd": root
+                    }
+                }
+            }))
+            .unwrap_or_default();
+            emit_bridge(&app, json!({ "event": "mcp_config", "data": snippet }));
+            Ok(json!({ "ok": true }))
+        },
+    )
+}
+
+#[tauri::command]
 fn check_update() -> Result<Value, String> {
     check_update_impl()
 }
@@ -449,6 +593,15 @@ pub fn run() {
             trigger_panic,
             confirm_guardrail,
             save_settings,
+            list_models,
+            test_connection,
+            remove_queued,
+            clear_queue,
+            list_learned,
+            approve_learned,
+            toggle_learned,
+            delete_learned,
+            get_mcp_config,
             download_model,
             cancel_download,
             check_update,

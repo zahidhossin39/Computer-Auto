@@ -30,7 +30,12 @@ OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 _session = requests.Session()  # keep-alive across the 2+ calls per step
 _pool = ThreadPoolExecutor(max_workers=4)  # a call Jev beat keeps running; don't let it block the next
 # Tried in order when the chosen model's provider is rate-limited (429) or down
-FALLBACK_MODELS = ["google/gemini-3.1-flash-lite", "qwen/qwen3-vl-30b-a3b-instruct"]
+FALLBACK_MODELS = ["google/gemini-2.5-flash", "qwen/qwen3-vl-30b-a3b-instruct"]
+MAX_LISTED_ELEMENTS = 80
+INTERACTIVE_UIA_KINDS = {
+    "Button", "Edit", "Document", "ComboBox", "MenuItem", "TabItem",
+    "Hyperlink", "ListItem", "CheckBox", "RadioButton", "TreeItem",
+}
 
 
 @dataclass
@@ -64,10 +69,14 @@ shortcut, clicking the one button asked for, submitting a search): the task then
 another look, so the same thing is never done twice.
 
 Clickable elements are marked on the screenshot with red numbered boxes and listed as
-"[number] Kind 'Name'". For a click, answer with that number in "element". Only if the thing
-to click has no box, describe it in "target" precisely enough to find it visually.
+"[number] Kind 'Name'". When a matching element is in that list, answer with its integer
+number in "element" instead of guessing coordinates. Only if the thing to click has no box,
+describe it in "target" precisely enough to find it visually. Never repeat an action whose
+previous step says "(the screen did not change)" — choose a different element, a keyboard
+shortcut, or return "done"/"none".
 
-You MUST respond strictly with valid JSON conforming to this schema:
+You MUST respond strictly with a single valid JSON object (no markdown fences or prose)
+conforming to this schema:
 {
   "action": "click" | "double_click" | "right_click" | "type" | "hotkey" | "scroll" | "wait" | "done" | "none",
   "element": integer (number of the marked element to click, or to scroll over),
@@ -83,10 +92,21 @@ You MUST respond strictly with valid JSON conforming to this schema:
 
 
 def _to_data_url(img: Image.Image) -> str:
-    """JPEG is ~3x smaller than PNG; upload size dominated call latency."""
-    buf = io.BytesIO()
-    img.convert("RGB").save(buf, "JPEG", quality=85)
-    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+    """JPEG is ~3x smaller than PNG; also keep payload under Claude's 5MB image limit."""
+    rgb = img.convert("RGB")
+    for quality, scale in ((85, 1.0), (75, 1.0), (75, 0.75), (70, 0.5)):
+        work = rgb
+        if scale < 1.0:
+            work = rgb.resize(
+                (max(1, int(rgb.width * scale)), max(1, int(rgb.height * scale))),
+                Image.Resampling.LANCZOS,
+            )
+        buf = io.BytesIO()
+        work.save(buf, "JPEG", quality=quality)
+        raw = buf.getvalue()
+        if len(raw) <= 3_500_000 or scale == 0.5:
+            return "data:image/jpeg;base64," + base64.b64encode(raw).decode()
+    return "data:image/jpeg;base64," + base64.b64encode(raw).decode()
 
 
 JEV_CLICK_CONFIDENCE = 0.9  # below this the vision model double-checks Jev's pick
@@ -180,6 +200,111 @@ def _parse_json(text: str) -> dict:
     return found
 
 
+def _parse_coords(text: str) -> dict:
+    """Parse grounding coordinates from JSON object, list of points, or [x, y] arrays."""
+    dec = json.JSONDecoder()
+    idx = 0
+    while idx < len(text):
+        obj_i = text.find("{", idx)
+        arr_i = text.find("[", idx)
+        candidates = [p for p in (obj_i, arr_i) if p != -1]
+        if not candidates:
+            break
+        start = min(candidates)
+        try:
+            parsed, end = dec.raw_decode(text, start)
+            if isinstance(parsed, dict):
+                if "x" in parsed and "y" in parsed:
+                    return parsed
+                for key in ("point", "coordinates", "bbox"):
+                    coords = parsed.get(key)
+                    if isinstance(coords, (list, tuple)) and len(coords) >= 2:
+                        return {"x": coords[0], "y": coords[1]}
+            elif isinstance(parsed, list) and parsed:
+                first = parsed[0]
+                if isinstance(first, dict) and "x" in first and "y" in first:
+                    return first
+                if len(parsed) >= 2 and all(isinstance(v, (int, float)) for v in parsed[:2]):
+                    return {"x": parsed[0], "y": parsed[1]}
+            idx = end
+        except ValueError:
+            idx = start + 1
+    raise ValueError(f"no JSON coordinates in model reply: {text[:80]!r}")
+
+
+def _extract_message_text(resp_json: dict) -> str:
+    """Extract text from OpenAI/OpenRouter chat completion JSON across string or block formats."""
+    choices = resp_json.get("choices") or []
+    if not choices:
+        err = resp_json.get("error")
+        if isinstance(err, dict) and err.get("message"):
+            raise RuntimeError(f"Provider error: {err['message']}")
+        raise ValueError("Empty choices in vision model response")
+    msg = choices[0].get("message") or {}
+    content = msg.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: List[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict) and isinstance(item.get("text"), str):
+                parts.append(item["text"])
+        return "\n".join(parts)
+    return str(content or "")
+
+
+def _format_api_error(status_code: int, body_text: str, model_name: str) -> str:
+    """Format HTTP provider errors into clear, UI-actionable messages."""
+    detail = ""
+    try:
+        parsed = json.loads(body_text)
+        if isinstance(parsed, dict):
+            err = parsed.get("error")
+            if isinstance(err, dict):
+                detail = str(err.get("message") or "").strip()
+            elif isinstance(err, str):
+                detail = err.strip()
+    except Exception:
+        pass
+    if not detail:
+        detail = body_text.strip()[:120]
+
+    if status_code in (401, 403):
+        return f"Invalid API key — check Settings (HTTP {status_code})"
+    if status_code == 402:
+        return f"API quota or credits exceeded — check billing (HTTP 402)"
+    if status_code == 404:
+        return f"Model '{model_name}' not found on provider (HTTP 404)"
+    if status_code == 429:
+        return f"Rate limited by provider (HTTP 429): {detail[:80]}"
+    return f"Vision API HTTP {status_code}: {detail[:100]}"
+
+
+def _select_elements(raw_elements, box, origin: Tuple[int, int]) -> list:
+    """Keep elements inside *box*, prioritizing named/interactive controls up to MAX_LISTED_ELEMENTS."""
+    inside = [e for e in raw_elements if _inside(e.rect, box, origin=origin)]
+    if len(inside) <= MAX_LISTED_ELEMENTS:
+        return inside
+    prioritized = [
+        e for e in inside
+        if (getattr(e, "name", "") or "").strip() or getattr(e, "kind", "") in INTERACTIVE_UIA_KINDS
+    ]
+    return (prioritized or inside)[:MAX_LISTED_ELEMENTS]
+
+
+def _coerce_element_index(value) -> Optional[int]:
+    """Accept integer or digit-string element indices (rejecting booleans)."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return None
+
+
 class VisionAgent:
     """Plans one GUI action at a time from a screenshot via an OpenRouter vision model."""
 
@@ -193,8 +318,21 @@ class VisionAgent:
         self.api_base = api_base.rstrip("/")  # OpenAI-compatible: OpenRouter, OpenAI, LM Studio...
         self.api_key = api_key or os.environ.get("OPENROUTER_API_KEY")
         self.model_name = model_name
-        self.mock_mode = mock_mode or (not self.api_key and "openrouter.ai" in self.api_base)
+        self._explicit_mock = bool(mock_mode)
+        self.mock_mode = self._explicit_mock or (not self.api_key and "openrouter.ai" in self.api_base)
         self.guardrail = SafetyGuardrail()
+
+    def _effective_api_key(self) -> Optional[str]:
+        if self.api_key and str(self.api_key).strip():
+            return str(self.api_key).strip()
+        if "openrouter.ai" in self.api_base:
+            env_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+            if env_key:
+                self.api_key = env_key
+                if not self._explicit_mock:
+                    self.mock_mode = False
+                return env_key
+        return None
 
     def _ask(
         self,
@@ -202,29 +340,73 @@ class VisionAgent:
         text: str,
         system: str = "",
         cancel_event: Optional[threading.Event] = None,
+        expect_coords: bool = False,
     ) -> dict:
         messages = [{"role": "system", "content": system}] if system else []
         messages.append({"role": "user", "content": [
             {"type": "image_url", "image_url": {"url": image_url}},
             {"type": "text", "text": text},
         ]})
-        body = {"model": self.model_name, "messages": messages, "temperature": 0}
+        body: dict = {"model": self.model_name, "messages": messages, "max_tokens": 512}
+        lower_model = self.model_name.lower()
+        is_reasoning = any(tok in lower_model for tok in ("/o1", "/o3", "/o4", "gpt-5"))
+        if not is_reasoning:
+            body["temperature"] = 0
         if "openrouter.ai" in self.api_base:  # other endpoints reject the unknown field
             # If the provider is busy, OpenRouter tries these instead of failing the task
             body["models"] = [self.model_name] + [m for m in FALLBACK_MODELS if m != self.model_name]
             body["provider"] = {"sort": "latency"}  # measured: qwen 0.7s steady vs 0.9-2.0s
-        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
-        last = None
+        key = self._effective_api_key()
+        headers = {"Authorization": f"Bearer {key}"} if key else {}
+        parser = _parse_coords if expect_coords else _parse_json
+        last_err = ""
+        json_retries_left = 2
+
         for attempt in range(3):
             if cancel_event is not None and cancel_event.is_set():
                 raise RuntimeError("vision request cancelled")
-            r = _session.post(self.api_base + "/chat/completions", headers=headers,
-                              json=body, timeout=60)
+            try:
+                r = _session.post(
+                    self.api_base + "/chat/completions",
+                    headers=headers,
+                    json=body,
+                    timeout=60,
+                )
+            except requests.RequestException as exc:
+                last_err = f"Network error reaching vision API: {exc}"
+                if attempt < 2:
+                    time.sleep(1.0)
+                    continue
+                raise RuntimeError(last_err) from exc
+
             if r.status_code == 200:
-                return _parse_json(r.json()["choices"][0]["message"]["content"])
-            last = f"{r.status_code} {r.text[:120]}"
+                reply_text = _extract_message_text(r.json())
+                try:
+                    return parser(reply_text)
+                except ValueError as parse_err:
+                    last_err = str(parse_err)
+                    if json_retries_left > 0:
+                        json_retries_left -= 1
+                        repair_msg = (
+                            "Your previous reply was not valid JSON. Return ONLY a single valid JSON object "
+                            + ('{"x": int, "y": int}.' if expect_coords else 'matching the action schema.')
+                        )
+                        body["messages"] = list(messages) + [
+                            {"role": "assistant", "content": reply_text[:500]},
+                            {"role": "user", "content": repair_msg},
+                        ]
+                        continue
+                    raise RuntimeError(f"Malformed JSON from vision model: {last_err}") from parse_err
+
+            # Some reasoning/OpenAI-compatible models reject temperature=0 with HTTP 400
+            if r.status_code == 400 and "temperature" in body and "temperature" in r.text.lower():
+                body.pop("temperature", None)
+                continue
+
+            last_err = _format_api_error(r.status_code, r.text, self.model_name)
             if r.status_code not in (429, 500, 502, 503, 529):  # not worth retrying
-                break
+                raise RuntimeError(last_err)
+
             wait = min(float(r.headers.get("retry-after") or 2 * (attempt + 1)), 8.0)
             print(f"[VISION]: {r.status_code} from the model, retrying in {wait:.0f}s")
             remaining = wait
@@ -234,7 +416,7 @@ class VisionAgent:
                 step = min(0.1, remaining)
                 time.sleep(step)
                 remaining -= step
-        raise RuntimeError(f"vision model unavailable after retries: {last}")
+        raise RuntimeError(last_err or "Vision model unavailable after retries")
 
     def plan_action(
         self,
@@ -249,12 +431,18 @@ class VisionAgent:
         if cancel_event is not None and cancel_event.is_set():
             return VisionAction(action="none", explanation="Cancelled")
 
-        if self.mock_mode:
+        self._effective_api_key()
+        if self._explicit_mock:
             return VisionAction(
                 action="click",
                 x=origin[0] + screenshot.width // 2,
                 y=origin[1] + screenshot.height // 2,
                 explanation="Mock center click",
+            )
+        if self.mock_mode:
+            return VisionAction(
+                action="none",
+                explanation="OpenRouter API key missing — add your key in Settings.",
             )
 
         # Work on the target window only: sharper image, fewer distractions, and the
@@ -266,7 +454,7 @@ class VisionAgent:
             if cancel_event is not None
             else uia.list_elements(hwnd)
         )
-        elements = [e for e in raw_elements if _inside(e.rect, box, origin=origin)]
+        elements = _select_elements(raw_elements, box, origin=origin)
         listing = "\n".join(f"[{i}] {e.kind} '{e.name}'" for i, e in enumerate(elements, 1))
 
         image = _to_data_url(_draw_marks(crop, elements, box, origin=origin))
@@ -314,18 +502,25 @@ class VisionAgent:
                 nudge = ('\n\nYour last answer was a click with no element and no target. '
                          'Answer again with "element": <number>.')
                 data = self._ask(image, prompt + nudge, SYSTEM_PROMPT, cancel_event=cancel_event)
+            elif data.get("action") == "type" and not str(data.get("text") or ""):
+                nudge = ('\n\nYour last answer was "type" with empty "text". '
+                         'Provide the exact "text" to type, or choose another action.')
+                data = self._ask(image, prompt + nudge, SYSTEM_PROMPT, cancel_event=cancel_event)
             x = y = None
-            n = data.get("element")
+            n = _coerce_element_index(data.get("element"))
             act = data.get("action")
-            if act in ("click", "double_click", "right_click", "type", "scroll") and isinstance(n, int) and 1 <= n <= len(elements):
+            if act in ("click", "double_click", "right_click", "type", "scroll") and n is not None and 1 <= n <= len(elements):
                 x, y = elements[n - 1].center
-            elif data.get("action") == "type":
+            elif act == "type":
                 # No target given: type into the window's own text area rather than
                 # blindly at whatever happens to hold focus.
                 field = next((e for e in elements if e.kind in ("Document", "Edit")), None)
                 if field:
                     x, y = field.center
-            elif act in ("click", "double_click", "right_click", "type") and data.get("target"):
+                elif data.get("target"):
+                    x, y = self._locate(data["target"], image, crop_size, cancel_event=cancel_event)
+                    x, y = x + box[0] + origin[0], y + box[1] + origin[1]
+            elif act in ("click", "double_click", "right_click") and data.get("target"):
                 x, y = self._locate(data["target"], image, crop_size, cancel_event=cancel_event)
                 x, y = x + box[0] + origin[0], y + box[1] + origin[1]  # crop -> global screen coordinates
             return VisionAction(
@@ -340,7 +535,7 @@ class VisionAgent:
                 explanation=data.get("explanation", ""),
             )
         except Exception as e:
-            return VisionAction(action="none", explanation=f"Vision API error: {e}")
+            return VisionAction(action="none", explanation=str(e))
 
     def _locate(
         self,
@@ -356,6 +551,7 @@ class VisionAgent:
             'Return only JSON {"x": int, "y": int}: the center of '
             f"{target}, with coordinates normalized to 0-1000 over the image.",
             cancel_event=cancel_event,
+            expect_coords=True,
         )
         raw_x, raw_y = d.get("x"), d.get("y")
         if (

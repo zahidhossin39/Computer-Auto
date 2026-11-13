@@ -303,3 +303,75 @@ def test_cancel_event_aborts_retry_backoff_immediately():
         act = agent.plan_action("click ok", Image.new("RGB", (200, 200)), cancel_event=cancel)
     assert act.action == "none"
     mock_ask.assert_not_called()
+
+
+def test_locate_parses_real_ask_json_object_and_list():
+    """_locate works end-to-end through _ask for both {x,y} and [{x,y}] grounding replies."""
+    agent = VisionAgent(api_key="k")
+    r_obj = Mock(status_code=200)
+    r_obj.json.return_value = {"choices": [{"message": {"content": '{"x": 500, "y": 250}'}}]}
+    with patch("src.vision.agent._session.post", return_value=r_obj):
+        assert agent._locate("btn", "url", (1000, 800)) == (500, 200)
+
+    r_list = Mock(status_code=200)
+    r_list.json.return_value = {
+        "choices": [{"message": {"content": '```json\n[{"x": 250, "y": 500}, {"x": 400, "y": 500}]\n```'}}]
+    }
+    with patch("src.vision.agent._session.post", return_value=r_list):
+        assert agent._locate("btn", "url", (1000, 800)) == (250, 400)
+
+
+def test_malformed_json_retries_and_succeeds():
+    """If the model replies with malformed JSON once, _ask retries with repair prompt."""
+    agent = VisionAgent(api_key="k")
+    bad = Mock(status_code=200)
+    bad.json.return_value = {"choices": [{"message": {"content": "Sure, I will click it."}}]}
+    good = Mock(status_code=200)
+    good.json.return_value = {
+        "choices": [{"message": {"content": [{"type": "text", "text": '{"action": "done", "explanation": "ok"}'}]}}]
+    }
+    with patch("src.vision.agent._session.post", side_effect=[bad, good]) as mock_post:
+        res = agent._ask("url", "prompt")
+    assert res["action"] == "done"
+    assert mock_post.call_count == 2
+
+
+def test_string_element_index_and_reasoning_model_payload():
+    """String digit element indices resolve cleanly and reasoning models omit temperature=0."""
+    from src.vision.uia import Element
+    agent = VisionAgent(api_key="k", model_name="openai/gpt-5")
+    elements = [Element("A", "Button", (0, 0, 20, 20)), Element("B", "Button", (40, 40, 80, 80))]
+    good = Mock(status_code=200)
+    good.json.return_value = {
+        "choices": [{"message": {"content": '{"action": "click", "element": "2", "explanation": "click B"}'}}]
+    }
+    with patch("src.vision.uia.list_elements", return_value=elements), \
+         patch("src.jev.choose", return_value=("none", 1.0)), \
+         patch("src.vision.agent._session.post", return_value=good) as mock_post:
+        act = agent.plan_action("click B", Image.new("RGB", (200, 200)))
+    assert (act.x, act.y) == (60, 60)
+    assert "temperature" not in mock_post.call_args.kwargs["json"]
+
+
+def test_api_key_and_quota_errors_surfaced_clearly(monkeypatch):
+    """HTTP 401/402 and missing OpenRouter key surface clear messages to the UI."""
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    missing = VisionAgent(api_key="", api_base="https://openrouter.ai/api/v1")
+    act_missing = missing.plan_action("click ok", Image.new("RGB", (200, 200)))
+    assert act_missing.action == "none"
+    assert "API key missing" in act_missing.explanation
+
+    agent = VisionAgent(api_key="bad-key")
+    resp_401 = Mock(status_code=401, text='{"error":{"message":"User not found"}}', headers={})
+    with patch("src.vision.uia.list_elements", return_value=[]), \
+         patch("src.vision.agent._session.post", return_value=resp_401):
+        act_401 = agent.plan_action("click ok", Image.new("RGB", (200, 200)))
+    assert act_401.action == "none"
+    assert "Invalid API key" in act_401.explanation
+
+    resp_402 = Mock(status_code=402, text='{"error":{"message":"Insufficient credits"}}', headers={})
+    with patch("src.vision.uia.list_elements", return_value=[]), \
+         patch("src.vision.agent._session.post", return_value=resp_402):
+        act_402 = agent.plan_action("click ok", Image.new("RGB", (200, 200)))
+    assert act_402.action == "none"
+    assert "quota or credits exceeded" in act_402.explanation

@@ -7,6 +7,7 @@ import {
   FileText,
   Globe,
   Layout,
+  ListOrdered,
   Mic,
   MicOff,
   Minimize2,
@@ -16,12 +17,13 @@ import {
   ShieldAlert,
   Square,
   Terminal,
+  Trash2,
   Volume2,
   X,
   Zap,
 } from "lucide-react";
 import { RobotMascot3D } from "./RobotMascot3D";
-import type { ActivityEntry, MascotState } from "../types";
+import type { ActivityEntry, MascotState, QueueState } from "../types";
 
 interface StudioViewProps {
   state: MascotState;
@@ -31,11 +33,14 @@ interface StudioViewProps {
   continuous: boolean;
   theme: "dark" | "light";
   activities: ActivityEntry[];
+  queue: QueueState;
   onToggleMic: () => void;
   onToggleContinuous: () => void;
   onPanic: () => void;
   onRunCommand: (text: string) => void;
   onConfirmGuardrail: (approved: boolean) => void;
+  onRemoveQueued: (id: string) => void;
+  onClearQueue: () => void;
 }
 
 const STATE_M3: Record<
@@ -109,11 +114,14 @@ export const StudioView: React.FC<StudioViewProps> = ({
   continuous,
   theme,
   activities,
+  queue,
   onToggleMic,
   onToggleContinuous,
   onPanic,
   onRunCommand,
   onConfirmGuardrail,
+  onRemoveQueued,
+  onClearQueue,
 }) => {
   const [commandInput, setCommandInput] = useState("");
   const m3State = STATE_M3[state] || STATE_M3.ready;
@@ -343,6 +351,73 @@ export const StudioView: React.FC<StudioViewProps> = ({
           })}
         </div>
       </section>
+
+      {/* Task Queue */}
+      {(queue.running || queue.pending.length > 0) && (
+        <section className="rounded-3xl bg-white dark:bg-[#1F1D26] border border-black/10 dark:border-[#49454F]/40 p-4 space-y-2.5 shadow-sm">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <ListOrdered className="w-4 h-4 text-[#6750A4] dark:text-[#D0BCFF]" />
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-[#CAC4D0]">
+                Task Queue
+              </h3>
+              <span className="text-[11px] font-mono px-2 py-0.5 rounded-full bg-[#6750A4]/10 dark:bg-[#D0BCFF]/15 text-[#6750A4] dark:text-[#D0BCFF]">
+                {queue.pending.length} pending
+              </span>
+            </div>
+            {queue.pending.length > 0 && (
+              <button
+                type="button"
+                onClick={onClearQueue}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-rose-500/10 hover:bg-rose-500/20 text-rose-500 dark:text-rose-300 border border-rose-500/20 transition-all"
+              >
+                <Trash2 className="w-3 h-3" />
+                Clear queue
+              </button>
+            )}
+          </div>
+
+          {queue.running && (
+            <div className="flex items-center gap-2.5 px-3 py-2 rounded-2xl bg-violet-500/10 border border-violet-500/25">
+              <span className="w-2 h-2 rounded-full bg-violet-400 animate-pulse shrink-0" />
+              <span className="text-[11px] font-bold uppercase tracking-wider text-violet-500 dark:text-violet-300 shrink-0">
+                Running
+              </span>
+              <span className="text-xs font-medium text-slate-800 dark:text-[#E6E0E9] truncate">
+                {queue.running.text}
+              </span>
+            </div>
+          )}
+
+          {queue.pending.length > 0 && (
+            <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
+              {queue.pending.map((item, idx) => (
+                <div
+                  key={item.id}
+                  className="flex items-center justify-between gap-2 px-3 py-1.5 rounded-2xl bg-slate-100/80 dark:bg-[#141218]/60 border border-black/5 dark:border-[#49454F]/30"
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-[11px] font-mono text-slate-400 dark:text-[#938F99] w-4 shrink-0">
+                      #{idx + 1}
+                    </span>
+                    <span className="text-xs text-slate-700 dark:text-[#CAC4D0] truncate">
+                      {item.text}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onRemoveQueued(item.id)}
+                    aria-label={`Remove queued task ${item.text}`}
+                    className="p-1 rounded-full text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors shrink-0"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
 
       {/* Live Activity & Vision Execution Feed */}
       <section className="space-y-3 pt-1">

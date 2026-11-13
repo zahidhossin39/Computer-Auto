@@ -33,6 +33,7 @@ pub struct AppSettings {
     pub vision_model: String,
     pub vision_api_base: String,
     pub vision_api_key: String,
+    pub stt_engine: String,
     pub stt_cloud_model: String,
     pub theme: String,
     pub max_vision_steps: u32,
@@ -46,6 +47,7 @@ impl Default for AppSettings {
             vision_model: DEFAULT_MODEL.to_string(),
             vision_api_base: DEFAULT_API_BASE.to_string(),
             vision_api_key: String::new(),
+            stt_engine: "parakeet".to_string(),
             stt_cloud_model: String::new(),
             theme: "dark".to_string(),
             max_vision_steps: 8,
@@ -63,6 +65,13 @@ impl AppSettings {
         if self.stt_cloud_model == DEPRECATED_MODEL {
             self.stt_cloud_model = DEFAULT_MODEL.to_string();
         }
+        if self.stt_engine.trim().is_empty() {
+            self.stt_engine = if !self.stt_cloud_model.trim().is_empty() {
+                "cloud".to_string()
+            } else {
+                "parakeet".to_string()
+            };
+        }
         if self.vision_api_base.trim().is_empty() {
             self.vision_api_base = DEFAULT_API_BASE.to_string();
         }
@@ -79,6 +88,7 @@ impl AppSettings {
         json!({
             "vision_model": self.vision_model,
             "vision_api_base": self.vision_api_base,
+            "stt_engine": self.stt_engine,
             "stt_cloud_model": self.stt_cloud_model,
             "theme": self.theme,
             "max_vision_steps": self.max_vision_steps,
@@ -90,6 +100,16 @@ impl AppSettings {
             "app_version": APP_VERSION,
         })
     }
+}
+
+fn is_masked_key(val: &str) -> bool {
+    let trimmed = val.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    trimmed.contains("...")
+        || trimmed.contains("••••")
+        || trimmed.chars().all(|c| c == '*')
 }
 
 pub fn mask_api_key(key: &str) -> String {
@@ -166,34 +186,52 @@ fn read_env_openrouter_key() -> Option<String> {
 
 fn read_settings_file(path: &Path) -> Option<AppSettings> {
     let raw = fs::read_to_string(path).ok()?;
-    let mut parsed: AppSettings = serde_json::from_str(&raw).ok()?;
+    let val: Value = serde_json::from_str(&raw).ok()?;
+    let mut parsed: AppSettings = serde_json::from_value(val.clone()).ok()?;
+    if parsed.vision_api_key.trim().is_empty() {
+        if let Some(or_key) = val.get("openrouter_api_key").and_then(|v| v.as_str()) {
+            let trimmed = or_key.trim();
+            if !trimmed.is_empty() && !is_masked_key(trimmed) {
+                parsed.vision_api_key = trimmed.to_string();
+            }
+        }
+    }
     parsed.migrate();
     Some(parsed)
 }
 
-pub fn load_and_sync_settings() -> AppSettings {
-    let appdata_path = appdata_settings_path();
-    let mut candidates = vec![appdata_path.clone()];
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            candidates.push(dir.join("settings.json"));
-        }
-    }
-    if let Ok(cwd) = std::env::current_dir() {
-        candidates.push(cwd.join("settings.json"));
-    }
-    candidates.push(PathBuf::from(r"D:\Vibe-coding\Computer-Auto\settings.json"));
-
-    let mut settings = candidates
-        .iter()
-        .find_map(|p| read_settings_file(p))
-        .unwrap_or_default();
-
+pub fn load_and_sync_settings_from(
+    appdata_path: &Path,
+    fallback_paths: &[PathBuf],
+    env_key: Option<&str>,
+) -> AppSettings {
     let mut changed = false;
-    if let Some(env_key) = read_env_openrouter_key() {
-        if settings.vision_api_key.trim().is_empty() {
-            settings.vision_api_key = env_key;
+    let mut settings = if let Some(s) = read_settings_file(appdata_path) {
+        s
+    } else if let Some(migrated) = fallback_paths.iter().find_map(|p| read_settings_file(p)) {
+        changed = true;
+        migrated
+    } else {
+        AppSettings::default()
+    };
+
+    // If AppData settings existed without an API key, migrate a legacy saved key or seed from .env.
+    // Never overwrite a key the user already saved in AppData.
+    if settings.vision_api_key.trim().is_empty() {
+        if let Some(legacy_key) = fallback_paths
+            .iter()
+            .filter_map(|p| read_settings_file(p))
+            .map(|s| s.vision_api_key)
+            .find(|k| !k.trim().is_empty())
+        {
+            settings.vision_api_key = legacy_key;
             changed = true;
+        } else if let Some(seed) = env_key {
+            let trimmed = seed.trim();
+            if !trimmed.is_empty() {
+                settings.vision_api_key = trimmed.to_string();
+                changed = true;
+            }
         }
     }
 
@@ -204,10 +242,27 @@ pub fn load_and_sync_settings() -> AppSettings {
     }
 
     if changed || !appdata_path.exists() {
-        let _ = write_settings_file(&appdata_path, &settings);
+        let _ = write_settings_file(appdata_path, &settings);
     }
 
     settings
+}
+
+pub fn load_and_sync_settings() -> AppSettings {
+    let appdata_path = appdata_settings_path();
+    let mut fallback_paths = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            fallback_paths.push(dir.join("settings.json"));
+        }
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        fallback_paths.push(cwd.join("settings.json"));
+    }
+    fallback_paths.push(PathBuf::from(r"D:\Vibe-coding\Computer-Auto\settings.json"));
+
+    let env_key = read_env_openrouter_key();
+    load_and_sync_settings_from(&appdata_path, &fallback_paths, env_key.as_deref())
 }
 
 fn write_settings_file(path: &Path, settings: &AppSettings) -> Result<(), String> {
@@ -225,6 +280,7 @@ fn write_settings_file(path: &Path, settings: &AppSettings) -> Result<(), String
         base_obj.insert("vision_api_key".into(), json!(settings.vision_api_key));
         base_obj.insert("openrouter_api_key".into(), json!(settings.vision_api_key));
     }
+    base_obj.insert("stt_engine".into(), json!(settings.stt_engine));
     base_obj.insert("stt_cloud_model".into(), json!(settings.stt_cloud_model));
     base_obj.insert("theme".into(), json!(settings.theme));
     base_obj.insert("max_vision_steps".into(), json!(settings.max_vision_steps));
@@ -233,6 +289,14 @@ fn write_settings_file(path: &Path, settings: &AppSettings) -> Result<(), String
 
     let serialized =
         serde_json::to_string_pretty(&base_obj).map_err(|e| format!("Serialize error: {e}"))?;
+    let tmp_path = path.with_file_name(format!(
+        ".{}.tmp",
+        path.file_name().and_then(|n| n.to_str()).unwrap_or("settings.json")
+    ));
+    if fs::write(&tmp_path, &serialized).is_ok() && fs::rename(&tmp_path, path).is_ok() {
+        return Ok(());
+    }
+    let _ = fs::remove_file(&tmp_path);
     fs::write(path, serialized).map_err(|e| format!("Write error: {e}"))
 }
 
@@ -254,8 +318,14 @@ pub fn apply_settings_patch(patch: &Value, current: &mut AppSettings) {
             .and_then(|v| v.as_str())
         {
             let trimmed = v.trim();
-            if !trimmed.is_empty() && !trimmed.contains("...") {
+            if !trimmed.is_empty() && !is_masked_key(trimmed) {
                 current.vision_api_key = trimmed.to_string();
+            }
+        }
+        if let Some(v) = obj.get("stt_engine").and_then(|v| v.as_str()) {
+            let trimmed = v.trim();
+            if !trimmed.is_empty() {
+                current.stt_engine = trimmed.to_string();
             }
         }
         if let Some(v) = obj.get("stt_cloud_model").and_then(|v| v.as_str()) {
@@ -277,14 +347,17 @@ pub fn apply_settings_patch(patch: &Value, current: &mut AppSettings) {
     current.migrate();
 }
 
-pub fn save_settings_to_disk(patch: &Value, current: &mut AppSettings) -> Result<(), String> {
+pub fn save_settings_to_path(
+    path: &Path,
+    patch: &Value,
+    current: &mut AppSettings,
+) -> Result<(), String> {
     apply_settings_patch(patch, current);
-    write_settings_file(&appdata_settings_path(), current)?;
-    let repo_settings = PathBuf::from(r"D:\Vibe-coding\Computer-Auto\settings.json");
-    if repo_settings.exists() {
-        let _ = write_settings_file(&repo_settings, current);
-    }
-    Ok(())
+    write_settings_file(path, current)
+}
+
+pub fn save_settings_to_disk(patch: &Value, current: &mut AppSettings) -> Result<(), String> {
+    save_settings_to_path(&appdata_settings_path(), patch, current)
 }
 
 pub fn locate_bridge_root() -> Option<PathBuf> {
@@ -1030,6 +1103,259 @@ pub fn run_openrouter_fallback(text: &str, settings: &AppSettings) -> Result<Str
 }
 
 // ============================================================================
+// Live Provider Model Discovery & Connection Testing
+// ============================================================================
+
+pub fn infer_provider_name(model_id: &str) -> String {
+    let prefix = model_id.split('/').next().unwrap_or("").trim().to_lowercase();
+    match prefix.as_str() {
+        "google" => "Google Gemini".to_string(),
+        "anthropic" => "Anthropic Claude".to_string(),
+        "openai" => "OpenAI".to_string(),
+        "meta-llama" | "meta" => "Meta".to_string(),
+        "mistralai" | "mistral" => "Mistral".to_string(),
+        "x-ai" | "xai" => "xAI".to_string(),
+        "deepseek" => "DeepSeek".to_string(),
+        "qwen" => "Qwen".to_string(),
+        "" => "Other".to_string(),
+        _ => {
+            if model_id.contains('/') {
+                let mut chars = prefix.chars();
+                match chars.next() {
+                    Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                    None => "Other".to_string(),
+                }
+            } else {
+                let lower = model_id.to_lowercase();
+                if lower.starts_with("gemini") {
+                    "Google Gemini".to_string()
+                } else if lower.starts_with("claude") {
+                    "Anthropic Claude".to_string()
+                } else if lower.starts_with("gpt") || lower.starts_with("o1") || lower.starts_with("o3") || lower.starts_with("o4") {
+                    "OpenAI".to_string()
+                } else {
+                    "Other".to_string()
+                }
+            }
+        }
+    }
+}
+
+pub fn normalize_model_entry(raw: &Value) -> Option<Value> {
+    let id = raw
+        .get("id")
+        .and_then(|v| v.as_str())
+        .or_else(|| raw.get("name").and_then(|v| v.as_str()))?
+        .trim();
+    if id.is_empty() || id.ends_with(":batch") {
+        return None;
+    }
+
+    let clean_id = id.strip_prefix("models/").unwrap_or(id);
+    let display_name = raw
+        .get("name")
+        .or_else(|| raw.get("displayName"))
+        .and_then(|v| v.as_str())
+        .unwrap_or(clean_id)
+        .trim();
+
+    let context_length = raw
+        .get("context_length")
+        .or_else(|| raw.get("inputTokenLimit"))
+        .and_then(|v| v.as_u64());
+
+    let input_modalities: Vec<String> = raw
+        .get("architecture")
+        .and_then(|a| a.get("input_modalities"))
+        .and_then(|m| m.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_lowercase()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let lower = clean_id.to_lowercase();
+    let (supports_vision, supports_audio, modalities_inferred) = if !input_modalities.is_empty() {
+        (
+            input_modalities.iter().any(|m| m == "image"),
+            input_modalities.iter().any(|m| m == "audio"),
+            false,
+        )
+    } else {
+        let vision_guess = [
+            "gemini", "gpt-4o", "gpt-4.1", "gpt-5", "claude-3", "claude-4", "claude-5",
+            "claude-sonnet", "claude-opus", "claude-haiku", "vision", "-vl", "pixtral",
+            "llava", "llama-4", "grok-4", "omni",
+        ]
+        .iter()
+        .any(|tok| lower.contains(tok));
+        let audio_guess = [
+            "audio", "transcribe", "whisper", "gemini-2.5", "gemini-2.0", "gemini-3",
+            "gemini-4", "voxtral", "omni",
+        ]
+        .iter()
+        .any(|tok| lower.contains(tok));
+        (vision_guess, audio_guess, true)
+    };
+
+    let pricing_prompt = raw
+        .get("pricing")
+        .and_then(|p| p.get("prompt"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let pricing_completion = raw
+        .get("pricing")
+        .and_then(|p| p.get("completion"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    Some(json!({
+        "id": clean_id,
+        "name": display_name,
+        "provider": infer_provider_name(clean_id),
+        "context_length": context_length,
+        "input_modalities": input_modalities,
+        "pricing_prompt": pricing_prompt,
+        "pricing_completion": pricing_completion,
+        "supports_vision": supports_vision,
+        "supports_audio": supports_audio,
+        "modalities_inferred": modalities_inferred,
+    }))
+}
+
+fn ureq_get_json(url: &str, api_key: &str) -> Result<Value, String> {
+    let mut req = ureq::get(url).timeout(std::time::Duration::from_secs(15));
+    if !api_key.trim().is_empty() {
+        req = req.set("Authorization", &format!("Bearer {}", api_key.trim()));
+    }
+    match req.call() {
+        Ok(resp) => resp
+            .into_json::<Value>()
+            .map_err(|e| format!("Invalid JSON from {url}: {e}")),
+        Err(ureq::Error::Status(code, resp)) => {
+            let body = resp.into_string().unwrap_or_default();
+            if code == 401 || code == 403 {
+                Err(format!("Invalid API key or unauthorized (HTTP {code})"))
+            } else {
+                let snippet: String = body.trim().chars().take(160).collect();
+                Err(format!("Provider HTTP {code}: {snippet}"))
+            }
+        }
+        Err(ureq::Error::Transport(t)) => Err(format!("Network error connecting to {url}: {t}")),
+    }
+}
+
+pub fn list_models_impl(base_url: &str, api_key: &str) -> Result<Value, String> {
+    let base = if base_url.trim().is_empty() {
+        DEFAULT_API_BASE
+    } else {
+        base_url.trim().trim_end_matches('/')
+    };
+    let url = format!("{base}/models");
+    let raw = ureq_get_json(&url, api_key)?;
+
+    let items = raw
+        .get("data")
+        .and_then(|v| v.as_array())
+        .or_else(|| raw.get("models").and_then(|v| v.as_array()))
+        .or_else(|| raw.as_array())
+        .ok_or_else(|| "Unexpected /models response format".to_string())?;
+
+    let mut models: Vec<Value> = items.iter().filter_map(normalize_model_entry).collect();
+    models.sort_by(|a, b| {
+        let pa = a["provider"].as_str().unwrap_or("");
+        let pb = b["provider"].as_str().unwrap_or("");
+        let na = a["name"].as_str().unwrap_or("");
+        let nb = b["name"].as_str().unwrap_or("");
+        pa.cmp(pb).then_with(|| na.cmp(nb))
+    });
+
+    Ok(json!({
+        "base_url": base,
+        "models": models,
+    }))
+}
+
+pub fn test_connection_impl(base_url: &str, api_key: &str, model: &str) -> Result<Value, String> {
+    let base = if base_url.trim().is_empty() {
+        DEFAULT_API_BASE
+    } else {
+        base_url.trim().trim_end_matches('/')
+    };
+    let key = api_key.trim();
+
+    if base.contains("openrouter.ai") {
+        if key.is_empty() {
+            return Err("OpenRouter API key is required.".to_string());
+        }
+        let auth_info = ureq_get_json(&format!("{base}/auth/key"), key)?;
+        let models_val = list_models_impl(base, key)?;
+        let count = models_val["models"]
+            .as_array()
+            .map(|a| a.len())
+            .unwrap_or(0);
+        let free_tier = auth_info
+            .get("data")
+            .and_then(|d| d.get("is_free_tier"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let tier_note = if free_tier { "free tier" } else { "paid credits" };
+        return Ok(json!({
+            "ok": true,
+            "message": format!("Connected to OpenRouter ({tier_note}, {count} models available)"),
+            "models_count": count,
+        }));
+    }
+
+    match list_models_impl(base, key) {
+        Ok(models_val) => {
+            let count = models_val["models"]
+                .as_array()
+                .map(|a| a.len())
+                .unwrap_or(0);
+            Ok(json!({
+                "ok": true,
+                "message": format!("Connected to {base} ({count} models available)"),
+                "models_count": count,
+            }))
+        }
+        Err(err) => {
+            // Some OpenAI-compatible proxies omit /models; try minimal chat completion if model is set
+            let chosen_model = model.trim();
+            if !chosen_model.is_empty() && err.contains("404") {
+                let endpoint = format!("{base}/chat/completions");
+                let mut req = ureq::post(&endpoint)
+                    .timeout(std::time::Duration::from_secs(15))
+                    .set("Content-Type", "application/json");
+                if !key.is_empty() {
+                    req = req.set("Authorization", &format!("Bearer {key}"));
+                }
+                let body = json!({
+                    "model": chosen_model,
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "max_tokens": 1
+                });
+                match req.send_json(body) {
+                    Ok(_) => Ok(json!({
+                        "ok": true,
+                        "message": format!("Connected to {base} (model {chosen_model} responded)"),
+                        "models_count": 0,
+                    })),
+                    Err(ureq::Error::Status(code, resp)) => {
+                        let txt: String = resp.into_string().unwrap_or_default().chars().take(120).collect();
+                        Err(format!("Connection test failed (HTTP {code}): {txt}"))
+                    }
+                    Err(ureq::Error::Transport(t)) => Err(format!("Network error: {t}")),
+                }
+            } else {
+                Err(err)
+            }
+        }
+    }
+}
+
+// ============================================================================
 // Built-in GitHub Releases Self-Updater
 // ============================================================================
 
@@ -1241,5 +1567,115 @@ OPENROUTER_API_KEY="sk-or-v1-test123456"
         assert_eq!(resolve_chrome_profile_from_json("open my gmail", &state), None);
         // Out-of-bounds ordinal returns None
         assert_eq!(resolve_chrome_profile_from_json("open 9th gmail", &state), None);
+    }
+
+    fn temp_test_dir(tag: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!("computer_auto_{tag}_{nanos}"));
+        let _ = fs::create_dir_all(&dir);
+        dir
+    }
+
+    #[test]
+    fn test_save_and_reload_persists_api_key_in_appdata() {
+        let root = temp_test_dir("save_reload");
+        let appdata_settings = root.join("appdata").join("settings.json");
+
+        let mut s = AppSettings::default();
+        let patch = json!({
+            "vision_api_key": "sk-or-v1-persisted1234",
+            "vision_model": "anthropic/claude-sonnet-4.5",
+            "stt_engine": "cloud",
+            "stt_cloud_model": "google/gemini-2.5-flash"
+        });
+        save_settings_to_path(&appdata_settings, &patch, &mut s).unwrap();
+        assert_eq!(s.vision_api_key, "sk-or-v1-persisted1234");
+        assert_eq!(s.stt_engine, "cloud");
+
+        // Reloading ignores masked keys and preserves saved key
+        let masked_patch = json!({
+            "vision_api_key": "sk-or-...1234",
+            "theme": "light"
+        });
+        save_settings_to_path(&appdata_settings, &masked_patch, &mut s).unwrap();
+
+        let reloaded = load_and_sync_settings_from(&appdata_settings, &[], None);
+        assert_eq!(reloaded.vision_api_key, "sk-or-v1-persisted1234");
+        assert_eq!(reloaded.vision_model, "anthropic/claude-sonnet-4.5");
+        assert_eq!(reloaded.stt_engine, "cloud");
+        assert_eq!(reloaded.theme, "light");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_simulated_upgrade_and_dotenv_never_clobber_saved_key() {
+        let root = temp_test_dir("upgrade");
+        let appdata_settings = root.join("appdata").join("settings.json");
+        let v1_settings = root.join("exe_v1").join("settings.json");
+        let v2_settings = root.join("exe_v2").join("settings.json");
+
+        let mut s = AppSettings::default();
+        save_settings_to_path(
+            &appdata_settings,
+            &json!({ "openrouter_api_key": "sk-or-v1-user-saved-9999" }),
+            &mut s,
+        )
+        .unwrap();
+
+        // Simulate v2 installed in new exe dir with empty exe-dir settings.json and a .env key
+        let _ = fs::create_dir_all(v1_settings.parent().unwrap());
+        let _ = fs::create_dir_all(v2_settings.parent().unwrap());
+        fs::write(&v2_settings, r#"{"openrouter_api_key": ""}"#).unwrap();
+
+        let reloaded = load_and_sync_settings_from(
+            &appdata_settings,
+            &[v2_settings, v1_settings],
+            Some("sk-or-v1-dotenv-should-not-clobber"),
+        );
+        assert_eq!(reloaded.vision_api_key, "sk-or-v1-user-saved-9999");
+
+        // When AppData has no key at all, .env seeds it once
+        let empty_appdata = root.join("appdata_fresh").join("settings.json");
+        let seeded = load_and_sync_settings_from(
+            &empty_appdata,
+            &[],
+            Some("sk-or-v1-dotenv-seed-1111"),
+        );
+        assert_eq!(seeded.vision_api_key, "sk-or-v1-dotenv-seed-1111");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_read_settings_legacy_openrouter_key_only() {
+        let root = temp_test_dir("legacy_key");
+        let path = root.join("settings.json");
+        fs::write(&path, r#"{"openrouter_api_key": "sk-or-v1-legacy5678"}"#).unwrap();
+        let loaded = read_settings_file(&path).unwrap();
+        assert_eq!(loaded.vision_api_key, "sk-or-v1-legacy5678");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_normalize_model_entry_extracts_modalities_and_provider() {
+        let raw = json!({
+            "id": "google/gemini-2.5-flash",
+            "name": "Google: Gemini 2.5 Flash",
+            "context_length": 1048576,
+            "architecture": { "input_modalities": ["text", "image", "audio"] },
+            "pricing": { "prompt": "0.00000015", "completion": "0.0000006" }
+        });
+        let norm = normalize_model_entry(&raw).unwrap();
+        assert_eq!(norm["provider"], "Google Gemini");
+        assert_eq!(norm["supports_vision"], true);
+        assert_eq!(norm["supports_audio"], true);
+        assert_eq!(norm["context_length"], 1048576);
+
+        let batch = json!({ "id": "google/gemini-2.5-flash:batch" });
+        assert!(normalize_model_entry(&batch).is_none());
     }
 }

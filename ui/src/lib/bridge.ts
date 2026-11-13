@@ -3,8 +3,12 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AppSettings,
   BridgeEvent,
+  ConnectionTestResult,
   IntentCommand,
+  LearnedCommand,
   MascotState,
+  ModelInfo,
+  QueueItem,
   UpdateStatus,
 } from "../types";
 
@@ -475,4 +479,136 @@ export async function closeWin(): Promise<void> {
   if (isTauriEnv()) {
     await invoke("close_win");
   }
+}
+
+export async function listModels(
+  baseUrl?: string,
+  apiKey?: string
+): Promise<{ base_url: string; models: ModelInfo[] }> {
+  if (isTauriEnv()) {
+    return invoke<{ base_url: string; models: ModelInfo[] }>("list_models", {
+      baseUrl: baseUrl ?? null,
+      apiKey: apiKey ?? null,
+    });
+  }
+  return {
+    base_url:
+      baseUrl ||
+      browserSettings.vision_api_base ||
+      "https://openrouter.ai/api/v1",
+    models: [],
+  };
+}
+
+export async function testConnection(
+  baseUrl?: string,
+  apiKey?: string,
+  model?: string
+): Promise<ConnectionTestResult> {
+  if (isTauriEnv()) {
+    return invoke<ConnectionTestResult>("test_connection", {
+      baseUrl: baseUrl ?? null,
+      apiKey: apiKey ?? null,
+      model: model ?? null,
+    });
+  }
+  const hasKey = Boolean((apiKey || "").trim() || browserSettings.has_api_key);
+  return hasKey
+    ? { ok: true, message: "Preview mode: API key format looks valid.", models_count: 0 }
+    : { ok: false, message: "Enter an API key first." };
+}
+
+let browserQueuePending: QueueItem[] = [];
+let browserQueueRunning: QueueItem | null = null;
+
+export async function removeQueued(id: string): Promise<void> {
+  if (isTauriEnv()) {
+    await invoke("remove_queued", { id });
+    return;
+  }
+  browserQueuePending = browserQueuePending.filter((item) => item.id !== id);
+  emitBrowser({
+    event: "queue",
+    pending: browserQueuePending,
+    running: browserQueueRunning,
+  });
+}
+
+export async function clearQueue(): Promise<void> {
+  if (isTauriEnv()) {
+    await invoke("clear_queue");
+    return;
+  }
+  browserQueuePending = [];
+  emitBrowser({
+    event: "queue",
+    pending: [],
+    running: browserQueueRunning,
+  });
+}
+
+let browserLearned: LearnedCommand[] = [];
+
+export async function listLearned(): Promise<void> {
+  if (isTauriEnv()) {
+    await invoke("list_learned");
+    return;
+  }
+  emitBrowser({ event: "learned", data: [...browserLearned] });
+}
+
+export async function approveLearned(id: string): Promise<void> {
+  if (isTauriEnv()) {
+    await invoke("approve_learned", { id });
+    return;
+  }
+  browserLearned = browserLearned.map((cmd) =>
+    cmd.id === id ? { ...cmd, suggested: false, enabled: true } : cmd
+  );
+  emitBrowser({ event: "learned", data: [...browserLearned] });
+}
+
+export async function toggleLearned(
+  id: string,
+  enabled: boolean
+): Promise<void> {
+  if (isTauriEnv()) {
+    await invoke("toggle_learned", { id, enabled });
+    return;
+  }
+  browserLearned = browserLearned.map((cmd) =>
+    cmd.id === id ? { ...cmd, enabled } : cmd
+  );
+  emitBrowser({ event: "learned", data: [...browserLearned] });
+}
+
+export async function deleteLearned(id: string): Promise<void> {
+  if (isTauriEnv()) {
+    await invoke("delete_learned", { id });
+    return;
+  }
+  browserLearned = browserLearned.filter((cmd) => cmd.id !== id);
+  emitBrowser({ event: "learned", data: [...browserLearned] });
+}
+
+export async function getMcpConfig(): Promise<void> {
+  if (isTauriEnv()) {
+    await invoke("get_mcp_config");
+    return;
+  }
+  emitBrowser({
+    event: "mcp_config",
+    data: JSON.stringify(
+      {
+        mcpServers: {
+          "computer-auto": {
+            command: "python",
+            args: ["-m", "src.mcp_server"],
+          },
+        },
+      },
+      null,
+      2
+    ),
+  });
 }

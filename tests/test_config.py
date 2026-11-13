@@ -129,31 +129,80 @@ def test_optional_config_fields_defaults_and_overrides(tmp_path, monkeypatch):
     assert cfg_bad.vision_model == DEFAULT_VISION_MODEL
 
 
-def test_dotenv_precedence_by_mtime_and_missing_key(tmp_path, monkeypatch):
-    """Newer .env key overrides stale settings.json; newer settings.json wins over .env."""
+def test_dotenv_seeds_only_when_missing_and_never_clobbers_saved_key(tmp_path, monkeypatch):
+    """A dev .env seeds OPENROUTER_API_KEY only when settings has none, and never clobbers a saved key."""
     app_dir = tmp_path / "app"
     app_dir.mkdir(parents=True, exist_ok=True)
     env_file = app_dir / ".env"
     settings_file = app_dir / "settings.json"
     monkeypatch.setattr(cfg_mod, "SETTINGS_PATH", settings_file)
 
-    env_file.write_text("OPENROUTER_API_KEY=sk-from-dotenv-new\n", encoding="utf-8")
-    settings_file.write_text(json.dumps({"openrouter_api_key": "sk-old-stale"}), encoding="utf-8")
-
-    # Make settings.json older than .env
-    env_mtime = env_file.stat().st_mtime
-    os.utime(settings_file, (env_mtime - 100, env_mtime - 100))
-
+    # 1. No saved key -> .env seeds it
+    env_file.write_text("OPENROUTER_API_KEY=sk-from-dotenv-seed\n", encoding="utf-8")
     merged = load_merged_settings()
-    assert merged["openrouter_api_key"] == "sk-from-dotenv-new"
+    assert merged["openrouter_api_key"] == "sk-from-dotenv-seed"
+    assert merged["vision_api_key"] == "sk-from-dotenv-seed"
 
-    # Now simulate explicit save_merged_settings() after .env
-    os.utime(env_file, (env_mtime - 200, env_mtime - 200))
-    save_merged_settings({"openrouter_api_key": "sk-explicit-ui-save"})
-    merged2 = load_merged_settings()
-    assert merged2["openrouter_api_key"] == "sk-explicit-ui-save"
+    # 2. User saves their own key -> persisted to APPDATA and survives even a newer .env
+    save_merged_settings({"vision_api_key": "sk-explicit-ui-save"})
+    appdata_file = tmp_path / "appdata" / "settings.json"
+    assert appdata_file.is_file()
+
+    # Touch .env to be newer than settings.json with a different key
+    saved_mtime = appdata_file.stat().st_mtime
+    env_file.write_text("OPENROUTER_API_KEY=sk-from-dotenv-newer\n", encoding="utf-8")
+    os.utime(env_file, (saved_mtime + 100, saved_mtime + 100))
+
+    reloaded = load_merged_settings()
+    assert reloaded["openrouter_api_key"] == "sk-explicit-ui-save"
+    assert reloaded["vision_api_key"] == "sk-explicit-ui-save"
+
+    # Saving another setting (without passing key) preserves the saved key and does not fall back to .env
+    save_merged_settings({"theme": "light", "vision_api_key": ""})
+    reloaded2 = load_merged_settings()
+    assert reloaded2["theme"] == "light"
+    assert reloaded2["openrouter_api_key"] == "sk-explicit-ui-save"
     assert os.environ["OPENROUTER_API_KEY"] == "sk-explicit-ui-save"
-    assert (tmp_path / "appdata" / "settings.json").is_file()
+
+
+def test_simulated_upgrade_new_exe_dir_same_appdata_keeps_key(tmp_path, monkeypatch):
+    """Simulated app update/reinstall (new exe dir, same APPDATA) keeps user-saved API key."""
+    v1_dir = tmp_path / "install_v2_2"
+    v1_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(cfg_mod, "get_app_dir", lambda: v1_dir)
+    monkeypatch.setattr(cfg_mod, "SETTINGS_PATH", v1_dir / "settings.json")
+
+    save_merged_settings({
+        "vision_api_key": "sk-or-v1-user-persisted-key-9999",
+        "vision_model": "anthropic/claude-sonnet-4.5",
+        "theme": "light",
+    })
+
+    # Simulate installing v2.4 into a brand-new exe directory with a fresh .env and empty app-dir settings
+    v2_dir = tmp_path / "install_v2_4"
+    v2_dir.mkdir(parents=True, exist_ok=True)
+    (v2_dir / ".env").write_text("OPENROUTER_API_KEY=sk-dev-override-should-not-win\n", encoding="utf-8")
+    (v2_dir / "settings.json").write_text(json.dumps({"openrouter_api_key": ""}), encoding="utf-8")
+
+    monkeypatch.setattr(cfg_mod, "get_app_dir", lambda: v2_dir)
+    monkeypatch.setattr(cfg_mod, "SETTINGS_PATH", v2_dir / "settings.json")
+
+    cfg = load_config()
+    assert cfg.vision_api_key == "sk-or-v1-user-persisted-key-9999"
+    assert cfg.vision_model == "anthropic/claude-sonnet-4.5"
+    assert cfg.theme == "light"
+    assert os.environ["OPENROUTER_API_KEY"] == "sk-or-v1-user-persisted-key-9999"
+
+
+def test_save_ignores_masked_key_and_syncs_reload(tmp_path, monkeypatch):
+    """Saving a masked placeholder from the UI must never overwrite the stored API key."""
+    monkeypatch.setattr(cfg_mod, "SETTINGS_PATH", tmp_path / "app" / "settings.json")
+    save_merged_settings({"openrouter_api_key": "sk-or-v1-real-secret-1234"})
+    save_merged_settings({"openrouter_api_key": "sk-or-v1...1234", "vision_api_key": "sk-or-••••••1234"})
+
+    cfg = load_config()
+    assert cfg.vision_api_key == "sk-or-v1-real-secret-1234"
+    assert os.environ["OPENROUTER_API_KEY"] == "sk-or-v1-real-secret-1234"
 
 
 def test_deprecated_model_auto_upgraded(tmp_path, monkeypatch):

@@ -6,20 +6,27 @@ import { CommandsView } from "./components/CommandsView";
 import { SettingsView } from "./components/SettingsView";
 import { RobotMascot3D } from "./components/RobotMascot3D";
 import {
+  approveLearned,
   cancelDownload,
   checkUpdate,
+  clearQueue,
   closeWin,
   confirmGuardrail,
+  deleteLearned,
   downloadModel,
   getInitialState,
+  getMcpConfig,
   installUpdate,
+  listLearned,
   minimizeWin,
+  removeQueued,
   runCommand,
   saveSettings,
   setAlwaysOnTop,
   setCompactMode,
   setContinuous,
   subscribeBridgeEvents,
+  toggleLearned,
   toggleMic,
   triggerPanic,
 } from "./lib/bridge";
@@ -29,9 +36,11 @@ import type {
   BridgeEvent,
   DownloadProgress,
   IntentCommand,
+  LearnedCommand,
   LogKind,
   MascotState,
   NavTab,
+  QueueState,
   UpdateStatus,
 } from "./types";
 
@@ -70,6 +79,9 @@ export function App() {
 
   const [activities, setActivities] = useState<ActivityEntry[]>([]);
   const [intents, setIntents] = useState<IntentCommand[]>([]);
+  const [queue, setQueue] = useState<QueueState>({ pending: [], running: null });
+  const [learnedCommands, setLearnedCommands] = useState<LearnedCommand[]>([]);
+  const [mcpConfig, setMcpConfig] = useState<string>("");
   const [settings, setSettings] = useState<AppSettings>({
     vision_model: "google/gemini-2.5-flash",
     stt_cloud_model: "google/gemini-2.5-flash",
@@ -139,7 +151,7 @@ export function App() {
       }
       case "settings": {
         if (ev.data) {
-          setSettings(ev.data);
+          setSettings((prev) => ({ ...prev, ...ev.data }));
           if (ev.data.theme === "light" || ev.data.theme === "dark") {
             setTheme(ev.data.theme);
           }
@@ -152,6 +164,25 @@ export function App() {
       case "intents": {
         if (Array.isArray(ev.data)) {
           setIntents(ev.data);
+        }
+        break;
+      }
+      case "queue": {
+        setQueue({
+          pending: Array.isArray(ev.pending) ? ev.pending : [],
+          running: ev.running ?? null,
+        });
+        break;
+      }
+      case "learned": {
+        if (Array.isArray(ev.data)) {
+          setLearnedCommands(ev.data);
+        }
+        break;
+      }
+      case "mcp_config": {
+        if (typeof ev.data === "string") {
+          setMcpConfig(ev.data);
         }
         break;
       }
@@ -179,6 +210,8 @@ export function App() {
     void (async () => {
       unlisten = await subscribeBridgeEvents(handleBridgeEvent);
       await getInitialState();
+      void listLearned();
+      void getMcpConfig();
     })();
     return () => {
       unlisten?.();
@@ -368,6 +401,7 @@ export function App() {
               continuous={continuous}
               theme={theme}
               activities={activities}
+              queue={queue}
               onToggleMic={() => void toggleMic()}
               onToggleContinuous={() => void handleToggleContinuous()}
               onPanic={() => void triggerPanic()}
@@ -375,6 +409,8 @@ export function App() {
               onConfirmGuardrail={(approved) =>
                 void confirmGuardrail(approved)
               }
+              onRemoveQueued={(id) => void removeQueued(id)}
+              onClearQueue={() => void clearQueue()}
             />
           )}
 
@@ -390,6 +426,8 @@ export function App() {
               settings={settings}
               downloadProgress={downloadProgress}
               updateStatus={updateStatus}
+              learnedCommands={learnedCommands}
+              mcpConfig={mcpConfig}
               onSaveSettings={async (next) => {
                 await saveSettings(next);
                 if (typeof next.always_on_top === "boolean") {
@@ -401,6 +439,13 @@ export function App() {
               onCancelDownload={() => void cancelDownload()}
               onCheckUpdate={() => void handleCheckUpdate()}
               onInstallUpdate={() => void handleInstallUpdate()}
+              onApproveLearned={(id) => void approveLearned(id)}
+              onToggleLearned={(id, enabled) => void toggleLearned(id, enabled)}
+              onDeleteLearned={(id) => void deleteLearned(id)}
+              onRefreshMcp={() => {
+                void listLearned();
+                void getMcpConfig();
+              }}
             />
           )}
         </main>
