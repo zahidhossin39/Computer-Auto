@@ -139,6 +139,7 @@ class StdioBridge:
         return {
             "vision_model": getattr(cfg, "vision_model", DEFAULT_VISION_MODEL),
             "vision_api_base": getattr(cfg, "vision_api_base", "https://openrouter.ai/api/v1"),
+            "vision_api_key": api_key,
             "stt_cloud_model": getattr(cfg, "stt_cloud_model", ""),
             "theme": getattr(cfg, "theme", "dark"),
             "max_vision_steps": int(getattr(cfg, "max_vision_steps", 8)),

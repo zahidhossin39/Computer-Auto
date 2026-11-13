@@ -11,7 +11,6 @@ import {
   Mic,
   PlugZap,
   RefreshCw,
-  Save,
   Search,
   Sparkles,
   Volume2,
@@ -99,6 +98,8 @@ const FALLBACK_MODELS: ModelInfo[] = [
     provider: "Google Gemini",
     context_length: 1048576,
     input_modalities: ["text", "image", "audio", "file"],
+    pricing_prompt: "0.0000003",
+    pricing_completion: "0.0000025",
     supports_vision: true,
     supports_audio: true,
   },
@@ -108,6 +109,8 @@ const FALLBACK_MODELS: ModelInfo[] = [
     provider: "Google Gemini",
     context_length: 1048576,
     input_modalities: ["text", "image", "audio", "file"],
+    pricing_prompt: "0.00000125",
+    pricing_completion: "0.00001",
     supports_vision: true,
     supports_audio: true,
   },
@@ -117,6 +120,8 @@ const FALLBACK_MODELS: ModelInfo[] = [
     provider: "Google Gemini",
     context_length: 1048576,
     input_modalities: ["text", "image", "audio", "file"],
+    pricing_prompt: "0.0000001",
+    pricing_completion: "0.0000004",
     supports_vision: true,
     supports_audio: true,
   },
@@ -126,6 +131,8 @@ const FALLBACK_MODELS: ModelInfo[] = [
     provider: "Anthropic Claude",
     context_length: 1000000,
     input_modalities: ["text", "image", "file"],
+    pricing_prompt: "0.000003",
+    pricing_completion: "0.000015",
     supports_vision: true,
     supports_audio: false,
   },
@@ -135,6 +142,8 @@ const FALLBACK_MODELS: ModelInfo[] = [
     provider: "Anthropic Claude",
     context_length: 200000,
     input_modalities: ["text", "image"],
+    pricing_prompt: "0.000015",
+    pricing_completion: "0.000075",
     supports_vision: true,
     supports_audio: false,
   },
@@ -144,6 +153,8 @@ const FALLBACK_MODELS: ModelInfo[] = [
     provider: "Anthropic Claude",
     context_length: 200000,
     input_modalities: ["text", "image"],
+    pricing_prompt: "0.000001",
+    pricing_completion: "0.000005",
     supports_vision: true,
     supports_audio: false,
   },
@@ -153,6 +164,8 @@ const FALLBACK_MODELS: ModelInfo[] = [
     provider: "OpenAI",
     context_length: 400000,
     input_modalities: ["text", "image", "file"],
+    pricing_prompt: "0.00000125",
+    pricing_completion: "0.00001",
     supports_vision: true,
     supports_audio: false,
   },
@@ -162,6 +175,8 @@ const FALLBACK_MODELS: ModelInfo[] = [
     provider: "OpenAI",
     context_length: 1047576,
     input_modalities: ["text", "image"],
+    pricing_prompt: "0.000002",
+    pricing_completion: "0.000008",
     supports_vision: true,
     supports_audio: false,
   },
@@ -171,6 +186,8 @@ const FALLBACK_MODELS: ModelInfo[] = [
     provider: "OpenAI",
     context_length: 128000,
     input_modalities: ["text", "image"],
+    pricing_prompt: "0.0000025",
+    pricing_completion: "0.00001",
     supports_vision: true,
     supports_audio: false,
   },
@@ -180,6 +197,8 @@ const FALLBACK_MODELS: ModelInfo[] = [
     provider: "OpenAI",
     context_length: 128000,
     input_modalities: ["text", "image"],
+    pricing_prompt: "0.00000015",
+    pricing_completion: "0.0000006",
     supports_vision: true,
     supports_audio: false,
   },
@@ -339,6 +358,33 @@ function formatContext(ctx?: number | null): string | null {
   return String(ctx);
 }
 
+function formatUsdPer1M(perToken?: string | null): string | null {
+  if (perToken == null || perToken === "") return null;
+  const num = Number(perToken);
+  if (!Number.isFinite(num) || num < 0) return null;
+  const perM = num * 1_000_000;
+  if (perM === 0) return "$0";
+  if (perM < 0.01) return `$${perM.toFixed(4).replace(/0+$/, "").replace(/\.$/, "")}`;
+  if (perM < 1) return `$${perM.toFixed(2)}`;
+  return `$${perM.toFixed(2).replace(/\.00$/, "")}`;
+}
+
+function formatModelCost(
+  prompt?: string | null,
+  completion?: string | null
+): { label: string; isFree: boolean } | null {
+  const p = formatUsdPer1M(prompt);
+  const c = formatUsdPer1M(completion);
+  if (!p && !c) return null;
+  if (p === "$0" && (c === "$0" || !c)) {
+    return { label: "Free", isFree: true };
+  }
+  if (p && c) {
+    return { label: `${p} / ${c} per 1M`, isFree: false };
+  }
+  return { label: `${p || c}/1M`, isFree: false };
+}
+
 interface ModelPickerProps {
   label: string;
   value: string;
@@ -456,8 +502,28 @@ const ModelPicker: React.FC<ModelPickerProps> = ({
           <div className="font-semibold truncate">
             {selectedModel ? selectedModel.name : value || "Select a model"}
           </div>
-          <div className="text-[10px] font-mono text-slate-500 dark:text-[#938F99] truncate">
-            {selectedModel ? `${selectedModel.provider} • ${selectedModel.id}` : value}
+          <div className="text-[10px] font-mono text-slate-500 dark:text-[#938F99] truncate flex items-center gap-1.5">
+            <span className="truncate">
+              {selectedModel ? `${selectedModel.provider} • ${selectedModel.id}` : value}
+            </span>
+            {selectedModel &&
+              (() => {
+                const cost = formatModelCost(
+                  selectedModel.pricing_prompt,
+                  selectedModel.pricing_completion
+                );
+                return cost ? (
+                  <span
+                    className={`shrink-0 px-1.5 py-0.2 rounded font-sans font-semibold ${
+                      cost.isFree
+                        ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-300"
+                        : "bg-amber-500/15 text-amber-700 dark:text-amber-300"
+                    }`}
+                  >
+                    {cost.label}
+                  </span>
+                ) : null;
+              })()}
           </div>
         </div>
         <ChevronDown
@@ -527,6 +593,7 @@ const ModelPicker: React.FC<ModelPickerProps> = ({
                   {group.items.map((m) => {
                     const isSelected = m.id === value;
                     const ctx = formatContext(m.context_length);
+                    const cost = formatModelCost(m.pricing_prompt, m.pricing_completion);
                     return (
                       <button
                         key={m.id}
@@ -549,6 +616,18 @@ const ModelPicker: React.FC<ModelPickerProps> = ({
                           </div>
                         </div>
                         <div className="flex items-center gap-1 shrink-0">
+                          {cost && (
+                            <span
+                              title="Input / Output USD per 1M tokens"
+                              className={`text-[10px] font-mono px-1.5 py-0.5 rounded font-semibold ${
+                                cost.isFree
+                                  ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-300"
+                                  : "bg-amber-500/15 text-amber-700 dark:text-amber-300"
+                              }`}
+                            >
+                              {cost.label}
+                            </span>
+                          )}
                           {ctx && (
                             <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-black/5 dark:bg-white/5 text-slate-500 dark:text-[#CAC4D0]">
                               {ctx}
@@ -598,8 +677,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const initialBase =
     settings.vision_api_base || settings.base_url || "https://openrouter.ai/api/v1";
   const initialModel = settings.vision_model || "google/gemini-2.5-flash";
+  const initialKey = settings.vision_api_key || settings.openrouter_api_key || "";
 
-  const [apiKey, setApiKey] = useState("");
+  const [apiKey, setApiKey] = useState(initialKey);
   const [showKey, setShowKey] = useState(false);
   const [baseUrl, setBaseUrl] = useState(initialBase);
   const [presetId, setPresetId] = useState<ProviderPresetId>(() =>
@@ -622,6 +702,31 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [loadingModels, setLoadingModels] = useState(false);
   const [testingConn, setTestingConn] = useState(false);
   const [connResult, setConnResult] = useState<ConnectionTestResult | null>(null);
+
+  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const editingKeyRef = useRef(false);
+  const latestValuesRef = useRef({
+    apiKey: initialKey,
+    baseUrl: initialBase,
+    visionModel: initialModel,
+    sttCloudModel: settings.stt_cloud_model || "google/gemini-2.5-flash",
+    maxSteps: settings.max_vision_steps || 8,
+    sttEngine: (settings.stt_engine || "parakeet") as "parakeet" | "cloud",
+    alwaysOnTop: Boolean(settings.always_on_top),
+    useJev: settings.use_jev ?? true,
+  });
+
+  latestValuesRef.current = {
+    apiKey,
+    baseUrl,
+    visionModel,
+    sttCloudModel,
+    maxSteps,
+    sttEngine,
+    alwaysOnTop,
+    useJev,
+  };
 
   const availableModels = liveModels.length > 0 ? liveModels : FALLBACK_MODELS;
 
@@ -648,6 +753,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     const nextBase =
       settings.vision_api_base || settings.base_url || "https://openrouter.ai/api/v1";
     const nextModel = settings.vision_model || "google/gemini-2.5-flash";
+    const incomingKey = settings.vision_api_key || settings.openrouter_api_key || "";
+    if (!editingKeyRef.current && incomingKey) {
+      setApiKey(incomingKey);
+    }
     setBaseUrl(nextBase);
     setVisionModel(nextModel);
     setPresetId(detectPreset(nextBase, nextModel));
@@ -659,31 +768,105 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   }, [settings]);
 
   useEffect(() => {
+    return () => {
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
     if (settings.has_api_key) {
       void fetchLiveModels(
-        settings.vision_api_base || settings.base_url || "https://openrouter.ai/api/v1"
+        settings.vision_api_base || settings.base_url || "https://openrouter.ai/api/v1",
+        settings.vision_api_key || settings.openrouter_api_key || undefined
       );
     }
-  }, [settings.has_api_key, settings.vision_api_base, settings.base_url, fetchLiveModels]);
+  }, [
+    settings.has_api_key,
+    settings.vision_api_base,
+    settings.base_url,
+    settings.vision_api_key,
+    settings.openrouter_api_key,
+    fetchLiveModels,
+  ]);
+
+  const persistSettings = useCallback(
+    async (overrides: Partial<AppSettings> = {}, refreshModels = false) => {
+      const cur = latestValuesRef.current;
+      const cleanBase =
+        (overrides.vision_api_base ?? cur.baseUrl).trim() ||
+        "https://openrouter.ai/api/v1";
+      const nextKey = (
+        overrides.vision_api_key ??
+        overrides.openrouter_api_key ??
+        cur.apiKey
+      ).trim();
+
+      const payload: Partial<AppSettings> = {
+        vision_api_base: cleanBase,
+        vision_model: overrides.vision_model ?? cur.visionModel,
+        stt_cloud_model: overrides.stt_cloud_model ?? cur.sttCloudModel,
+        max_vision_steps: overrides.max_vision_steps ?? cur.maxSteps,
+        stt_engine: overrides.stt_engine ?? cur.sttEngine,
+        always_on_top: overrides.always_on_top ?? cur.alwaysOnTop,
+        use_jev: overrides.use_jev ?? cur.useJev,
+      };
+      if (nextKey) {
+        payload.vision_api_key = nextKey;
+        payload.openrouter_api_key = nextKey;
+      }
+
+      setSaving(true);
+      try {
+        await onSaveSettings(payload);
+        if (refreshModels && nextKey) {
+          void fetchLiveModels(cleanBase, nextKey);
+        }
+        setToast("Auto-saved");
+        if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = setTimeout(() => setToast(null), 1800);
+      } finally {
+        setSaving(false);
+      }
+    },
+    [onSaveSettings, fetchLiveModels]
+  );
+
+  const scheduleAutoSave = useCallback(
+    (overrides: Partial<AppSettings> = {}, refreshModels = false) => {
+      if (autoSaveTimerRef.current) {
+        clearTimeout(autoSaveTimerRef.current);
+      }
+      autoSaveTimerRef.current = setTimeout(() => {
+        autoSaveTimerRef.current = null;
+        void persistSettings(overrides, refreshModels);
+      }, 400);
+    },
+    [persistSettings]
+  );
 
   const handleSelectPreset = (preset: ProviderPreset) => {
     setPresetId(preset.id);
     setConnResult(null);
     if (preset.id === "custom") {
-      if (
+      const nextCustom =
         !baseUrl ||
         baseUrl.includes("openrouter.ai") ||
         baseUrl.includes("googleapis.com") ||
         baseUrl.includes("api.openai.com")
-      ) {
-        setBaseUrl("http://localhost:11434/v1");
-      }
+          ? "http://localhost:11434/v1"
+          : baseUrl;
+      setBaseUrl(nextCustom);
+      void persistSettings({ vision_api_base: nextCustom });
       return;
     }
     setBaseUrl(preset.baseUrl);
+    const patch: Partial<AppSettings> = { vision_api_base: preset.baseUrl };
     if (preset.defaultModel) {
       setVisionModel(preset.defaultModel);
+      patch.vision_model = preset.defaultModel;
     }
+    void persistSettings(patch);
     if (apiKey.trim() || settings.has_api_key) {
       void fetchLiveModels(preset.baseUrl, apiKey.trim() || undefined);
     }
@@ -715,37 +898,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     }
   };
 
-  const handleSave = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSaving(true);
-    try {
-      const cleanBase = baseUrl.trim() || "https://openrouter.ai/api/v1";
-      const payload: Partial<AppSettings> = {
-        vision_api_base: cleanBase,
-        vision_model: visionModel,
-        stt_cloud_model: sttCloudModel,
-        max_vision_steps: maxSteps,
-        stt_engine: sttEngine,
-        always_on_top: alwaysOnTop,
-        use_jev: useJev,
-      };
-      if (apiKey.trim()) {
-        payload.vision_api_key = apiKey.trim();
-        payload.openrouter_api_key = apiKey.trim();
-      }
-      await onSaveSettings(payload);
-      const savedKey = apiKey.trim();
-      setApiKey("");
-      if (savedKey) {
-        void fetchLiveModels(cleanBase, savedKey);
-      }
-      setToast("Settings saved successfully");
-      setTimeout(() => setToast(null), 2600);
-    } finally {
-      setSaving(false);
-    }
-  };
-
   const downloadPct =
     downloadProgress.total > 0
       ? Math.min(
@@ -755,15 +907,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       : 0;
 
   return (
-    <form
-      onSubmit={handleSave}
-      className="flex-1 overflow-y-auto px-5 py-4 space-y-5 max-w-5xl mx-auto w-full"
-    >
-      {/* Toast Feedback */}
-      {toast && (
-        <div className="fixed bottom-6 right-6 z-50 flex items-center gap-2.5 px-5 py-3 rounded-full bg-emerald-500 text-slate-950 text-xs font-bold shadow-2xl shadow-emerald-500/30 animate-bounce-subtle">
-          <CheckCircle2 className="w-4 h-4" />
-          <span>{toast}</span>
+    <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5 max-w-5xl mx-auto w-full pb-8">
+      {/* Auto-save Toast Feedback */}
+      {(saving || toast) && (
+        <div className="fixed bottom-6 right-6 z-50 flex items-center gap-2 px-4 py-2.5 rounded-full bg-emerald-500 text-slate-950 text-xs font-bold shadow-2xl shadow-emerald-500/30">
+          {saving ? (
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+          ) : (
+            <CheckCircle2 className="w-3.5 h-3.5" />
+          )}
+          <span>{saving ? "Auto-saving..." : toast}</span>
         </div>
       )}
 
@@ -865,7 +1018,29 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <input
                 type={showKey ? "text" : "password"}
                 value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
+                onFocus={() => {
+                  editingKeyRef.current = true;
+                }}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setApiKey(val);
+                  if (val.trim()) {
+                    scheduleAutoSave(
+                      { vision_api_key: val.trim(), openrouter_api_key: val.trim() },
+                      true
+                    );
+                  }
+                }}
+                onBlur={() => {
+                  editingKeyRef.current = false;
+                  const val = apiKey.trim();
+                  if (val) {
+                    void persistSettings(
+                      { vision_api_key: val, openrouter_api_key: val },
+                      true
+                    );
+                  }
+                }}
                 placeholder={
                   settings.has_api_key
                     ? settings.masked_key || "•••••••••••• (saved)"
@@ -875,6 +1050,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               />
               <button
                 type="button"
+                title={showKey ? "Hide API key" : "Show API key"}
                 onClick={() => setShowKey((s) => !s)}
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 p-1 rounded-full"
               >
@@ -895,8 +1071,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               type="text"
               value={baseUrl}
               onChange={(e) => {
-                setBaseUrl(e.target.value);
-                setPresetId(detectPreset(e.target.value, visionModel));
+                const nextBase = e.target.value;
+                setBaseUrl(nextBase);
+                setPresetId(detectPreset(nextBase, visionModel));
+                scheduleAutoSave({ vision_api_base: nextBase });
+              }}
+              onBlur={() => {
+                void persistSettings({ vision_api_base: baseUrl });
               }}
               className="w-full px-3.5 py-2.5 rounded-2xl text-xs bg-slate-200/70 dark:bg-[#141218] border border-black/5 dark:border-white/10 text-slate-900 dark:text-[#E6E0E9] focus:outline-none focus:border-[#D0BCFF] focus:ring-2 focus:ring-[#D0BCFF]/30 transition-all font-mono"
             />
@@ -912,6 +1093,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             onChange={(id) => {
               setVisionModel(id);
               setPresetId(detectPreset(baseUrl, id));
+              void persistSettings({ vision_model: id });
             }}
             onRefresh={() =>
               void fetchLiveModels(
@@ -935,7 +1117,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               min={3}
               max={20}
               value={maxSteps}
-              onChange={(e) => setMaxSteps(Number(e.target.value))}
+              onChange={(e) => {
+                const val = Number(e.target.value);
+                setMaxSteps(val);
+                scheduleAutoSave({ max_vision_steps: val });
+              }}
               className="w-full accent-[#6750A4] dark:accent-[#D0BCFF] cursor-pointer mt-2"
             />
           </div>
@@ -977,9 +1163,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </label>
             <select
               value={sttEngine}
-              onChange={(e) =>
-                setSttEngine(e.target.value as "parakeet" | "cloud")
-              }
+              onChange={(e) => {
+                const mode = e.target.value as "parakeet" | "cloud";
+                setSttEngine(mode);
+                void persistSettings({ stt_engine: mode });
+              }}
               className="w-full px-3.5 py-2.5 rounded-2xl text-xs bg-slate-200/70 dark:bg-[#141218] border border-black/5 dark:border-white/10 text-slate-900 dark:text-[#E6E0E9] focus:outline-none focus:border-[#D0BCFF] focus:ring-2 focus:ring-[#D0BCFF]/30 transition-all cursor-pointer"
             >
               <option value="parakeet">
@@ -998,7 +1186,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             mode="audio"
             loading={loadingModels}
             isLive={liveModels.length > 0}
-            onChange={setSttCloudModel}
+            onChange={(id) => {
+              setSttCloudModel(id);
+              void persistSettings({ stt_cloud_model: id });
+            }}
             onRefresh={() =>
               void fetchLiveModels(
                 baseUrl.trim() || "https://openrouter.ai/api/v1",
@@ -1109,7 +1300,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             <input
               type="checkbox"
               checked={alwaysOnTop}
-              onChange={(e) => setAlwaysOnTop(e.target.checked)}
+              onChange={(e) => {
+                const checked = e.target.checked;
+                setAlwaysOnTop(checked);
+                void persistSettings({ always_on_top: checked });
+              }}
               className="w-4 h-4 accent-[#6750A4] dark:accent-[#D0BCFF] rounded cursor-pointer ml-3"
             />
           </label>
@@ -1126,7 +1321,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             <input
               type="checkbox"
               checked={useJev}
-              onChange={(e) => setUseJev(e.target.checked)}
+              onChange={(e) => {
+                const checked = e.target.checked;
+                setUseJev(checked);
+                void persistSettings({ use_jev: checked });
+              }}
               className="w-4 h-4 accent-[#6750A4] dark:accent-[#D0BCFF] rounded cursor-pointer ml-3"
             />
           </label>
@@ -1146,18 +1345,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         onDelete={onDeleteLearned}
         onRefresh={onRefreshMcp}
       />
-
-      {/* Floating Save Button */}
-      <div className="flex justify-end pb-4 pt-1">
-        <button
-          type="submit"
-          disabled={saving}
-          className="flex items-center gap-2 px-6 py-3 rounded-full text-xs font-bold bg-[#6750A4] dark:bg-[#D0BCFF] text-white dark:text-[#381E72] hover:brightness-110 shadow-lg shadow-purple-500/25 transition-all disabled:opacity-50"
-        >
-          <Save className="w-4 h-4" />
-          <span>{saving ? "Saving Changes..." : "Save Settings"}</span>
-        </button>
-      </div>
-    </form>
+    </div>
   );
 };

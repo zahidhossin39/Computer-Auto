@@ -88,6 +88,7 @@ impl AppSettings {
         json!({
             "vision_model": self.vision_model,
             "vision_api_base": self.vision_api_base,
+            "vision_api_key": key,
             "stt_engine": self.stt_engine,
             "stt_cloud_model": self.stt_cloud_model,
             "theme": self.theme,
