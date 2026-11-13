@@ -648,7 +648,12 @@ class ComputerAutoDaemon:
                 self.tts.speak(act_target)
             elif act_type == "wait":
                 wait_ms = getattr(act, "wait_ms", None) if not isinstance(act, dict) else act.get("wait_ms")
-                delay_s = float(wait_ms) / 1000.0 if wait_ms is not None else 0.5
+                if wait_ms is None:
+                    wait_ms = act_target or act_cmd
+                try:
+                    delay_s = float(wait_ms) / 1000.0 if wait_ms is not None else 0.5
+                except (TypeError, ValueError):
+                    delay_s = 0.5
                 time.sleep(max(0.0, min(5.0, delay_s)))
             elif act_type == "click_element":
                 clicked = False
