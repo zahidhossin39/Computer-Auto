@@ -94,10 +94,33 @@ def _env_candidate_paths() -> List[Path]:
     return unique
 
 
+def get_appdata_settings_path() -> Path:
+    """Return the authoritative per-user settings.json path in %APPDATA%."""
+    return get_appdata_dir() / "settings.json"
+
+
+def _is_masked_secret(value: str) -> bool:
+    """Return True if *value* looks like a UI-masked placeholder rather than a real key."""
+    s = value.strip()
+    if not s:
+        return False
+    if "..." in s or "••••" in s:
+        return True
+    return set(s) <= {"*"}
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    """Write *content* atomically to *path* so readers never see truncated JSON."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.tmp")
+    tmp_path.write_text(content, encoding="utf-8")
+    os.replace(tmp_path, path)
+
+
 def _settings_candidate_paths() -> List[Path]:
-    """Return deduplicated settings.json paths (app dir + AppData)."""
+    """Return deduplicated settings.json paths (AppData first, legacy app dir second)."""
     candidates = [
-        get_appdata_dir() / "settings.json",
+        get_appdata_settings_path(),
         SETTINGS_PATH,
     ]
     seen: set[Path] = set()
@@ -193,92 +216,139 @@ def load_intents(config_path: Optional[Path] = None) -> List[Intent]:
     return intents
 
 
-def load_merged_settings() -> Dict[str, Any]:
-    """Load and merge settings.json from AppData and app dir, respecting newer .env keys.
-
-    If a .env file has a non-empty OPENROUTER_API_KEY and settings.json either lacks a
-    key or was not explicitly saved after that .env file, the .env key takes precedence.
-    Deprecated model slugs are automatically upgraded.
-    """
-    existing_settings: List[tuple[float, Dict[str, Any]]] = []
-    for path in _settings_candidate_paths():
-        if path.is_file():
-            data = _read_json_dict(path)
-            if data:
-                try:
-                    mtime = os.path.getmtime(path)
-                except OSError:
-                    mtime = 0.0
-                existing_settings.append((mtime, data))
-
-    # Merge oldest -> newest so the most recently saved settings.json wins
-    existing_settings.sort(key=lambda item: item[0])
-    merged: Dict[str, Any] = {}
-    newest_settings_mtime = 0.0
-    for mtime, data in existing_settings:
-        merged.update(data)
-        if mtime > newest_settings_mtime:
-            newest_settings_mtime = mtime
-
-    # Upgrade deprecated model IDs
-    for model_field in ("vision_model", "stt_cloud_model"):
-        if merged.get(model_field):
-            merged[model_field] = _upgrade_model_id(merged[model_field])
-
-    # Check .env candidates for OPENROUTER_API_KEY
-    env_key = ""
-    env_mtime = 0.0
+def _read_first_env_key() -> str:
+    """Return OPENROUTER_API_KEY from the highest-priority .env candidate if present."""
     for env_path in _env_candidate_paths():
         if env_path.is_file():
             vals = _read_dotenv_file(env_path)
             candidate_key = str(vals.get("OPENROUTER_API_KEY") or "").strip()
             if candidate_key:
-                try:
-                    mtime = os.path.getmtime(env_path)
-                except OSError:
-                    mtime = 0.0
-                if not env_key or mtime > env_mtime:
-                    env_key = candidate_key
-                    env_mtime = mtime
+                return candidate_key
+    return ""
 
+
+def _read_settings_without_env() -> Dict[str, Any]:
+    """Load settings.json with %APPDATA%/Computer-Auto/settings.json as single source of truth.
+
+    Legacy app-dir settings.json (SETTINGS_PATH) is used only as fallback for fields/keys
+    absent from AppData, never overriding an AppData value or user-saved API key.
+    """
+    appdata_path = get_appdata_settings_path()
+    legacy_path = SETTINGS_PATH
+
+    legacy_data: Dict[str, Any] = {}
+    try:
+        same_file = legacy_path.resolve() == appdata_path.resolve()
+    except Exception:
+        same_file = legacy_path == appdata_path
+
+    if not same_file and legacy_path.is_file():
+        legacy_data = _read_json_dict(legacy_path)
+
+    appdata_data: Dict[str, Any] = _read_json_dict(appdata_path) if appdata_path.is_file() else {}
+
+    merged: Dict[str, Any] = dict(legacy_data)
+    for k, v in appdata_data.items():
+        # Never let an empty string in one field wipe a populated legacy key on first merge,
+        # unless AppData already carries a non-empty key in either key field.
+        if k in ("openrouter_api_key", "vision_api_key") and not str(v or "").strip():
+            continue
+        merged[k] = v
+
+    for model_field in ("vision_model", "stt_cloud_model"):
+        if merged.get(model_field):
+            merged[model_field] = _upgrade_model_id(merged[model_field])
+
+    openrouter_key = str(merged.get("openrouter_api_key") or "").strip()
+    vision_key = str(merged.get("vision_api_key") or "").strip()
+    if openrouter_key and not vision_key:
+        merged["vision_api_key"] = openrouter_key
+    elif vision_key and not openrouter_key:
+        merged["openrouter_api_key"] = vision_key
+
+    return merged
+
+
+def load_merged_settings() -> Dict[str, Any]:
+    """Load settings from %APPDATA%\\Computer-Auto\\settings.json (single source of truth).
+
+    A dev .env file may seed OPENROUTER_API_KEY ONLY when settings.json has no saved key;
+    it never overrides a key the user saved, regardless of file timestamps.
+    """
+    merged = _read_settings_without_env()
     settings_key = str(merged.get("openrouter_api_key") or merged.get("vision_api_key") or "").strip()
-    if settings_key and not merged.get("openrouter_api_key"):
-        merged["openrouter_api_key"] = settings_key
-    if env_key and (not settings_key or newest_settings_mtime <= env_mtime):
-        merged["openrouter_api_key"] = env_key
+
+    if not settings_key:
+        env_key = _read_first_env_key()
+        if env_key:
+            merged["openrouter_api_key"] = env_key
+            merged["vision_api_key"] = env_key
 
     return merged
 
 
 def save_merged_settings(data: Dict[str, Any]) -> None:
-    """Persist settings to both app dir and AppData, and apply API key to os.environ."""
-    merged = load_merged_settings()
-    merged.update(data)
+    """Persist settings to %APPDATA%\\Computer-Auto\\settings.json and apply API key to os.environ."""
+    merged = _read_settings_without_env()
+    clear_key = bool(data.get("clear_api_key"))
+
+    clean_patch: Dict[str, Any] = {}
+    for k, v in data.items():
+        if k == "clear_api_key":
+            continue
+        if k in ("openrouter_api_key", "vision_api_key"):
+            s = str(v or "").strip()
+            if not s or _is_masked_secret(s):
+                continue
+            clean_patch[k] = s
+        else:
+            clean_patch[k] = v
+
+    merged.update(clean_patch)
+
+    if clear_key:
+        merged.pop("openrouter_api_key", None)
+        merged.pop("vision_api_key", None)
+    else:
+        api_base = str(merged.get("vision_api_base") or "https://openrouter.ai/api/v1").lower()
+        if "vision_api_key" in clean_patch and "openrouter_api_key" not in clean_patch:
+            if "openrouter.ai" in api_base or not str(merged.get("openrouter_api_key") or "").strip():
+                merged["openrouter_api_key"] = clean_patch["vision_api_key"]
+        if "openrouter_api_key" in clean_patch and "vision_api_key" not in clean_patch:
+            merged["vision_api_key"] = clean_patch["openrouter_api_key"]
 
     for model_field in ("vision_model", "stt_cloud_model"):
         if merged.get(model_field):
             merged[model_field] = _upgrade_model_id(merged[model_field])
 
     payload = json.dumps(merged, indent=2)
+    # Primary single source of truth: %APPDATA%\Computer-Auto\settings.json
+    appdata_path = get_appdata_settings_path()
+    _atomic_write_text(appdata_path, payload)
+
+    # Best-effort mirror to legacy SETTINGS_PATH for dev/test compatibility
     for path in _settings_candidate_paths():
+        if path == appdata_path:
+            continue
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(payload, encoding="utf-8")
+            _atomic_write_text(path, payload)
         except Exception:
             pass
 
-    api_key = str(merged.get("openrouter_api_key") or "").strip()
+    api_key = str(merged.get("openrouter_api_key") or merged.get("vision_api_key") or "").strip()
     if api_key:
         os.environ["OPENROUTER_API_KEY"] = api_key
+    elif clear_key:
+        os.environ.pop("OPENROUTER_API_KEY", None)
 
 
 def load_settings() -> Dict[str, Any]:
-    """Read the merged settings (AppData + app dir + .env precedence)."""
+    """Read the merged settings (AppData authoritative + .env seed only when empty)."""
     return load_merged_settings()
 
 
 def save_settings(values: Dict[str, Any]) -> None:
-    """Write settings to both locations and apply the API key right away."""
+    """Write settings to AppData and apply the API key right away."""
     save_merged_settings(values)
 
 
@@ -286,7 +356,7 @@ def load_config() -> AppConfig:
     """Load full application configuration from merged settings and .env."""
     config = AppConfig(intents=load_intents())
     settings = load_merged_settings()
-    api_key = str(settings.get("openrouter_api_key") or "").strip()
+    api_key = str(settings.get("openrouter_api_key") or settings.get("vision_api_key") or "").strip()
     if api_key:
         os.environ["OPENROUTER_API_KEY"] = api_key
     if settings.get("vision_model"):
@@ -297,8 +367,9 @@ def load_config() -> AppConfig:
         config.stt_cloud_model = _upgrade_model_id(settings["stt_cloud_model"])
     if settings.get("vision_api_base"):
         config.vision_api_base = str(settings["vision_api_base"])
-    if settings.get("vision_api_key") is not None:
-        config.vision_api_key = str(settings["vision_api_key"])
+    vkey = str(settings.get("vision_api_key") or settings.get("openrouter_api_key") or "").strip()
+    if vkey:
+        config.vision_api_key = vkey
     if settings.get("theme"):
         config.theme = str(settings["theme"])
     if "minimize_to_tray" in settings:

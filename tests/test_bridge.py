@@ -70,7 +70,7 @@ def test_bridge_get_state_and_startup_events(monkeypatch):
     bridge.handle_message({"cmd": "get_state"})
     events = _parse_events(out)
     kinds = [e["event"] for e in events]
-    assert kinds == ["state", "settings", "intents"]
+    assert kinds[:4] == ["state", "settings", "intents", "queue"]
 
     settings_ev = events[1]["data"]
     assert settings_ev["vision_model"] == "google/gemini-2.5-flash"
@@ -206,3 +206,104 @@ def test_bridge_serve_forever_handles_audio_logs_and_bad_json():
     assert any(e["event"] == "log" and e["kind"] == "vision" for e in events)
     assert any(e["event"] == "log" and e["kind"] == "action" for e in events)
     assert any(e["event"] == "log" and e["kind"] == "error" for e in events)
+
+
+def test_bridge_emits_queue_events_and_handles_clear_and_remove():
+    """(e) The bridge emits queue events and handles clear_queue and remove_queued."""
+    import threading
+    from main import ComputerAutoDaemon
+
+    out = io.StringIO()
+    daemon = ComputerAutoDaemon(mock_stt=True, mock_vision=True, ui_mode="none")
+    daemon.router.use_jev = False
+    daemon.tts = Mock()
+    daemon.play_sound = lambda *a, **k: None
+
+    first_started = threading.Event()
+    release_first = threading.Event()
+    executed = []
+
+    def fake_exec(cmd):
+        executed.append(cmd)
+        if cmd == "volume_step_up":
+            first_started.set()
+            release_first.wait(timeout=3.0)
+        return True
+
+    daemon.executor = Mock()
+    daemon.executor.execute_system_action.side_effect = fake_exec
+
+    bridge = StdioBridge(daemon=daemon, out_stream=out)
+
+    # Send 3 rapid commands through the bridge
+    bridge.handle_message({"cmd": "run_command", "text": "volume up"})
+    assert first_started.wait(timeout=2.0)
+    bridge.handle_message({"cmd": "run_command", "text": "volume down"})
+    bridge.handle_message({"cmd": "run_command", "text": "mute"})
+
+    events = _parse_events(out)
+    queue_events = [e for e in events if e["event"] == "queue"]
+    assert len(queue_events) >= 2
+    latest_q = queue_events[-1]
+    assert latest_q["running"] is not None and latest_q["running"]["text"] == "volume up"
+    assert [p["text"] for p in latest_q["pending"]] == ["volume down", "mute"]
+
+    # Remove the first pending item ("volume down") by id
+    vol_down_id = latest_q["pending"][0]["id"]
+    bridge.handle_message({"cmd": "remove_queued", "id": vol_down_id})
+
+    events = _parse_events(out)
+    queue_events = [e for e in events if e["event"] == "queue"]
+    after_remove = queue_events[-1]
+    assert [p["text"] for p in after_remove["pending"]] == ["mute"]
+
+    # Add another command and then clear_queue
+    bridge.handle_message({"cmd": "run_command", "text": "volume down"})
+    bridge.handle_message({"cmd": "clear_queue"})
+
+    events = _parse_events(out)
+    queue_events = [e for e in events if e["event"] == "queue"]
+    after_clear = queue_events[-1]
+    assert after_clear["pending"] == []
+    assert after_clear["running"] is not None and after_clear["running"]["text"] == "volume up"
+
+    release_first.set()
+    assert daemon.wait_for_queue(timeout=2.0)
+
+    events = _parse_events(out)
+    queue_events = [e for e in events if e["event"] == "queue"]
+    assert queue_events[-1] == {"event": "queue", "pending": [], "running": None}
+    assert executed == ["volume_step_up"]
+
+
+def test_bridge_learned_and_mcp_config_commands(monkeypatch):
+    """Bridge handles list_learned, approve_learned, toggle_learned, delete_learned, get_mcp_config."""
+    out = io.StringIO()
+    daemon = _make_fake_daemon()
+    bridge = StdioBridge(daemon=daemon, out_stream=out)
+
+    fake_learned = SimpleNamespace(
+        bridge_list_learned=Mock(return_value=[{"id": "c1", "name": "test_cmd", "enabled": False}]),
+        bridge_approve_learned=Mock(return_value=[{"id": "c1", "name": "test_cmd", "enabled": True}]),
+        bridge_toggle_learned=Mock(return_value=[{"id": "c1", "name": "test_cmd", "enabled": False}]),
+        bridge_delete_learned=Mock(return_value=[]),
+        get_mcp_config_snippet=Mock(return_value='{"mcpServers":{"computer-auto":{}}}'),
+    )
+    monkeypatch.setattr(bridge, "_get_learned_module", lambda: fake_learned)
+
+    bridge.handle_message({"cmd": "list_learned"})
+    bridge.handle_message({"cmd": "approve_learned", "id": "c1"})
+    bridge.handle_message({"cmd": "toggle_learned", "id": "c1", "enabled": False})
+    bridge.handle_message({"cmd": "delete_learned", "id": "c1"})
+    bridge.handle_message({"cmd": "get_mcp_config"})
+
+    events = _parse_events(out)
+    learned_evs = [e for e in events if e["event"] == "learned"]
+    mcp_evs = [e for e in events if e["event"] == "mcp_config"]
+
+    assert len(learned_evs) == 4
+    assert learned_evs[0]["data"] == [{"id": "c1", "name": "test_cmd", "enabled": False}]
+    assert learned_evs[1]["data"] == [{"id": "c1", "name": "test_cmd", "enabled": True}]
+    assert learned_evs[3]["data"] == []
+    assert len(mcp_evs) == 1
+    assert "mcpServers" in mcp_evs[0]["data"]

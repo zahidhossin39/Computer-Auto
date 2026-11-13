@@ -75,8 +75,13 @@ class AudioRecorder:
 
         # The room's background level: fixed thresholds sat right at this mic's noise (peak
         # ~0.008), so noise started "speech" and "silence" never came - every command ran to
-        # the 7.5s cap. The first 0.3s after the mic opens only measures the room.
-        if not self._speech_detected and now - self._recording_start_time < self.calibration_s:
+        # the 7.5s cap. The first 0.3s after the mic opens measures quiet room background,
+        # unless the user is already speaking immediately after re-arm (peak >= 0.020).
+        if (
+            not self._speech_detected
+            and now - self._recording_start_time < self.calibration_s
+            and peak < 0.020
+        ):
             n = self._noise or (peak, rms)
             self._noise = (min(0.03, 0.8 * n[0] + 0.2 * peak), min(0.01, 0.8 * n[1] + 0.2 * rms))
             return
@@ -141,8 +146,15 @@ class AudioRecorder:
                     self._trigger_auto_stop()
                     return
 
-        # Hard ceiling on total recording duration to guarantee no indefinite hanging
-        if now - self._recording_start_time >= self.max_duration:
+        # Hard ceiling on total recording duration to guarantee no indefinite hanging.
+        # Once speech has started, measure from speech onset so pre-speech wait (<4.5s)
+        # does not cut off a normal sentence mid-phrase.
+        active_start = (
+            self._speech_start_time
+            if (self._speech_detected and self._speech_start_time > 0.0)
+            else self._recording_start_time
+        )
+        if now - active_start >= self.max_duration:
             self._trigger_auto_stop()
 
     def _audio_callback(self, indata, frames, time_info, status):

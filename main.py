@@ -51,6 +51,11 @@ from src.vision.agent import VisionAgent
 from src.tts.piper import VoiceFeedback
 from src.ui.shell import AppShell
 
+try:
+    from src import history
+except ImportError:
+    history = None
+
 
 def _supports_kwarg(fn, name: str) -> bool:
     """Return True if callable `fn` accepts keyword argument `name`."""
@@ -128,9 +133,15 @@ class ComputerAutoDaemon:
         )
         self.tts = VoiceFeedback()
         self._exec_lock = threading.Lock()
+        self._queue_cond = threading.Condition(self._exec_lock)
         self._is_executing = False
         self._run_id = 0
         self._cancel_event = threading.Event()
+        self._task_seq = 0
+        self._task_queue: list[dict] = []
+        self._priority_guardrail_queue: list[dict] = []
+        self._running_task: Optional[dict] = None
+        self.on_queue_change: Optional[Callable[[list[dict], Optional[dict]], None]] = None
         self._listening_lock = threading.Lock()
         self._listening_active = False
         self._pending_confirmation: Optional[str] = None
@@ -162,8 +173,92 @@ class ComputerAutoDaemon:
         self.hud = self.ui
 
     def on_manual_command(self, cmd: str) -> None:
-        """Handle manual command execution on a background thread so UI stays responsive."""
-        threading.Thread(target=self.handle_command, args=(cmd,), daemon=True).start()
+        """Queue manual command execution on the background worker so UI stays responsive."""
+        self.enqueue_command(cmd)
+
+    def _next_task_id_unlocked(self) -> str:
+        self._task_seq += 1
+        return f"q-{self._task_seq}"
+
+    def get_queue_snapshot(self) -> tuple:
+        """Return (pending_items, running_item) for UI queue events."""
+        with self._exec_lock:
+            pending = [
+                {"id": str(item["id"]), "text": str(item["text"])}
+                for item in self._task_queue
+                if not item.get("cancelled")
+            ]
+            running = (
+                {"id": str(self._running_task["id"]), "text": str(self._running_task["text"])}
+                if self._running_task is not None
+                else None
+            )
+            return pending, running
+
+    def _notify_queue_changed(self) -> None:
+        pending, running = self.get_queue_snapshot()
+        if callable(self.on_queue_change):
+            try:
+                self.on_queue_change(pending, running)
+            except Exception:
+                pass
+        if hasattr(self.ui, "update_queue"):
+            try:
+                self.ui.update_queue(pending, running)
+            except Exception:
+                pass
+
+    def clear_queue(self) -> list:
+        """Clear all pending tasks from the FIFO queue without stopping the running task."""
+        with self._exec_lock:
+            cleared = [
+                {"id": str(item["id"]), "text": str(item["text"])}
+                for item in self._task_queue
+            ]
+            for item in self._task_queue:
+                item["cancelled"] = True
+                ev = item.get("done_event")
+                if ev is not None:
+                    ev.set()
+            self._task_queue.clear()
+            self._queue_cond.notify_all()
+        self._notify_queue_changed()
+        self.ui_log("[QUEUE]: Cleared pending task queue.")
+        return cleared
+
+    def remove_queued(self, task_id: str) -> bool:
+        """Remove a single pending task by ID from the FIFO queue."""
+        target_id = str(task_id or "").strip()
+        removed = False
+        with self._exec_lock:
+            kept = []
+            for item in self._task_queue:
+                if not removed and str(item.get("id")) == target_id:
+                    removed = True
+                    item["cancelled"] = True
+                    ev = item.get("done_event")
+                    if ev is not None:
+                        ev.set()
+                else:
+                    kept.append(item)
+            self._task_queue = kept
+            if removed:
+                self._queue_cond.notify_all()
+        self._notify_queue_changed()
+        return removed
+
+    def wait_for_queue(self, timeout: float = 5.0) -> bool:
+        """Wait until the running task and all pending queued tasks finish."""
+        deadline = time.monotonic() + timeout
+        with self._exec_lock:
+            while self._is_executing or (
+                self._task_queue and self._pending_confirmation is None
+            ) or bool(self._priority_guardrail_queue):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                self._queue_cond.wait(timeout=min(0.05, remaining))
+            return True
 
     def _on_audio_silence_detected(self) -> None:
         """Invoked when voice activity ended and silence is detected."""
@@ -368,14 +463,16 @@ class ComputerAutoDaemon:
         if len(samples) == 0:
             err_msg = self.recorder.last_error or "Audio buffer empty (silence or device unready)"
             print(f"[WARNING] No audio captured: {err_msg}")
-            self.update_ui("ready", "Ready — No speech heard", err_msg[:45])
+            if not self._is_executing:
+                self.update_ui("ready", "Ready — No speech heard", err_msg[:45])
             self.ui_log(f"[AUDIO WARNING]: No audio captured -> {err_msg}")
             return
 
         if not getattr(self.recognizer, "is_ready", True):
             msg = "Offline voice model not downloaded — download in Settings or pick Cloud STT"
             print(f"[STT]: {msg}")
-            self.update_ui("ready", msg, "Open Settings to download")
+            if not self._is_executing:
+                self.update_ui("ready", msg, "Open Settings to download")
             self.ui_log(f"[STT]: {msg}")
             return
 
@@ -383,18 +480,24 @@ class ComputerAutoDaemon:
         if not text:
             if not getattr(self.recognizer, "is_ready", True):
                 msg = "Offline voice model not downloaded — download in Settings or pick Cloud STT"
-                self.update_ui("ready", msg, "Open Settings to download")
+                if not self._is_executing:
+                    self.update_ui("ready", msg, "Open Settings to download")
                 self.ui_log(f"[STT]: {msg}")
                 return
             print("[WARNING] Could not recognize speech.")
-            self.update_ui("ready", "Ready — Could not recognize audio", "Speak clearly into mic")
+            if not self._is_executing:
+                self.update_ui("ready", "Ready — Could not recognize audio", "Speak clearly into mic")
             self.ui_log("[STT]: No speech recognized (silence or low volume).")
             return
 
         if hasattr(self.ui, "set_transcript"):
             self.ui.set_transcript(text)
         self.ui_log(f"[STT TRANSCRIPTION]: \"{text}\"")
-        self.handle_command(text)
+        self.enqueue_command(text)
+        if self.continuous:
+            # Give fast Tier-1 intents (guardrail prompt / say) a brief moment to start TTS
+            # so _wait_for_tts_before_rearm can detect active speech before re-opening the mic.
+            time.sleep(0.025)
 
     def on_panic_key(self) -> None:
         """Invoked when user presses Escape."""
@@ -405,8 +508,23 @@ class ComputerAutoDaemon:
             self._run_id += 1
             self._cancel_event.set()
             self._is_executing = False
+            self._running_task = None
+            for item in self._priority_guardrail_queue:
+                item["cancelled"] = True
+                ev = item.get("done_event")
+                if ev is not None:
+                    ev.set()
+            self._priority_guardrail_queue.clear()
+            for item in self._task_queue:
+                item["cancelled"] = True
+                ev = item.get("done_event")
+                if ev is not None:
+                    ev.set()
+            self._task_queue.clear()
+            self._queue_cond.notify_all()
         self._pending_confirmation = None
         self._pending_vision_context = None
+        self._notify_queue_changed()
         if hasattr(self.tts, "stop"):
             self.tts.stop()
         with self._listening_lock:
@@ -420,8 +538,53 @@ class ComputerAutoDaemon:
         self.update_ui("ready", "Aborted (Panic Key)", "Action halted")
         self.ui_log("[PANIC]: Emergency stop triggered via Escape key.")
 
-    def _run_intent(self, intent, utterance: str, confirmed: bool) -> bool:
-        """Execute one deterministic intent. False means it now waits for a spoken "yes"."""
+    def _record_history(
+        self,
+        utterance: str,
+        route: str,
+        intent_name: Optional[str],
+        actions: list,
+        success: bool,
+        duration_ms: int,
+        error: Optional[str] = None,
+    ) -> None:
+        """Safely record an executed command to src.history without ever raising."""
+        try:
+            hist_mod = history
+            if hist_mod is None:
+                from src import history as hist_mod  # type: ignore[no-redef]
+            if hist_mod is not None and hasattr(hist_mod, "record_event"):
+                hist_mod.record_event(
+                    utterance=utterance,
+                    route=route,
+                    intent_name=intent_name,
+                    actions=actions,
+                    success=success,
+                    duration_ms=max(0, int(duration_ms)),
+                    error=error,
+                )
+        except Exception:
+            pass
+
+    def _infer_route_name(self, route_res) -> str:
+        explicit = getattr(route_res, "route", None)
+        if explicit in ("keyword", "slot", "jev", "learned", "vision"):
+            return explicit
+        if getattr(route_res, "is_vision", False):
+            return "vision"
+        intent = getattr(route_res, "intent", None)
+        cat = getattr(intent, "category", "") if intent else ""
+        if cat == "slot":
+            return "slot"
+        if cat == "learned":
+            return "learned"
+        return "keyword"
+
+    def _run_intent(self, intent, utterance: str, confirmed: bool) -> tuple:
+        """Execute one deterministic intent.
+
+        Returns (completed_not_parked: bool, exec_success: bool, action_records: list[dict], error: Optional[str]).
+        """
         print(f"[TIER 1 ROUTER]: Matched intent '{intent.name}' ({intent.category})")
         self.ui_log(f"[TIER 1 ROUTER]: Matched intent '{intent.name}' ({intent.category})")
 
@@ -433,7 +596,7 @@ class ComputerAutoDaemon:
             self.update_ui("guardrail", "Confirmation Required", "Say 'yes' to confirm or 'no' to cancel")
             self.ui_log(f"[GUARDRAIL]: {warning}")
             self.tts.speak(warning)
-            return False
+            return False, False, [], None
 
         # Execute action
         self.update_ui(
@@ -442,32 +605,89 @@ class ComputerAutoDaemon:
             f"Command: {intent.action.command or intent.action.target}",
         )
 
-        if intent.action.type == "system_action" and intent.action.command:
-            self.executor.execute_system_action(intent.action.command)
-            print(f"[EXECUTED]: Action '{intent.action.command}' dispatched.")
-            self.ui_log(f"[EXECUTED]: Dispatched '{intent.action.command}'")
-        elif intent.action.type == "launch_app":
-            success = self.executor.launch_app(intent.action)
-            if success:
-                print(f"[EXECUTED]: Launched '{intent.action.target}'.")
-                self.ui_log(f"[EXECUTED]: Launched '{intent.action.target}'")
-            else:
-                print(f"[ERROR]: Could not launch '{intent.action.target}'.")
-                self.ui_log(f"[ERROR]: Failed to launch '{intent.action.target}'")
-        elif intent.action.type == "say":
-            print(f"[ANSWER]: {intent.action.target}")
-            self.ui_log(f"[ANSWER]: {intent.action.target}")
-            self.tts.speak(intent.action.target)
-        elif intent.action.type in (
-            "hotkey", "open_app", "type_text", "open_url",
-            "focus_window", "close_window", "minimize_window", "maximize_window", "restore_window",
-        ):
-            ok = self.executor.run_action(intent.action)
-            print(f"[EXECUTED]: {intent.action.type} {intent.action.keys or intent.action.command or intent.action.target} ({'ok' if ok else 'failed'})")
-            self.ui_log(f"[EXECUTED]: {intent.name} ({'ok' if ok else 'failed'})")
+        # Support multi-step learned commands if attached on intent.steps
+        steps_list = getattr(intent, "steps", None)
+        actions_to_run = list(steps_list) if isinstance(steps_list, list) and steps_list else [intent.action]
+        action_records = []
+        overall_ok = True
+        err_msg = None
+
+        for act in actions_to_run:
+            act_type = getattr(act, "type", "") if not isinstance(act, dict) else str(act.get("type") or "")
+            act_cmd = getattr(act, "command", None) if not isinstance(act, dict) else act.get("command")
+            act_target = getattr(act, "target", None) if not isinstance(act, dict) else act.get("target")
+            act_args = list(getattr(act, "args", None) or []) if not isinstance(act, dict) else list(act.get("args") or [])
+            act_keys = list(getattr(act, "keys", None) or []) if not isinstance(act, dict) else list(act.get("keys") or [])
+
+            action_records.append({
+                "type": act_type,
+                "command": act_cmd,
+                "target": act_target,
+                "args": act_args,
+                "keys": act_keys,
+            })
+
+            if act_type == "system_action" and act_cmd:
+                self.executor.execute_system_action(act_cmd)
+                print(f"[EXECUTED]: Action '{act_cmd}' dispatched.")
+                self.ui_log(f"[EXECUTED]: Dispatched '{act_cmd}'")
+            elif act_type == "launch_app":
+                act_obj = act if not isinstance(act, dict) else intent.action
+                success = self.executor.launch_app(act_obj)
+                if success:
+                    print(f"[EXECUTED]: Launched '{act_target}'.")
+                    self.ui_log(f"[EXECUTED]: Launched '{act_target}'")
+                else:
+                    overall_ok = False
+                    err_msg = f"Could not launch '{act_target}'"
+                    print(f"[ERROR]: Could not launch '{act_target}'.")
+                    self.ui_log(f"[ERROR]: Failed to launch '{act_target}'")
+            elif act_type == "say":
+                print(f"[ANSWER]: {act_target}")
+                self.ui_log(f"[ANSWER]: {act_target}")
+                self.tts.speak(act_target)
+            elif act_type == "wait":
+                wait_ms = getattr(act, "wait_ms", None) if not isinstance(act, dict) else act.get("wait_ms")
+                delay_s = float(wait_ms) / 1000.0 if wait_ms is not None else 0.5
+                time.sleep(max(0.0, min(5.0, delay_s)))
+            elif act_type == "click_element":
+                clicked = False
+                try:
+                    from src import learned as _learned_mod
+                    if hasattr(_learned_mod, "execute_click_element"):
+                        clicked = bool(_learned_mod.execute_click_element(act_target or act_cmd, self.executor))
+                except Exception:
+                    pass
+                if not clicked:
+                    try:
+                        from src.vision import uia
+                        import pyautogui
+                        hwnd = self.executor._get_active_window() or 0
+                        needle = str(act_target or act_cmd or "").strip().lower()
+                        for el in uia.list_elements(hwnd):
+                            if needle and needle in (el.name or "").lower():
+                                pyautogui.click(*el.center)
+                                clicked = True
+                                break
+                    except Exception:
+                        clicked = False
+                if not clicked:
+                    overall_ok = False
+                    err_msg = f"Element '{act_target or act_cmd}' not found"
+            elif act_type in (
+                "hotkey", "open_app", "type_text", "type_in_window", "search_in_browser", "open_url",
+                "focus_window", "close_window", "minimize_window", "maximize_window", "restore_window",
+            ):
+                act_obj = act if not isinstance(act, dict) else intent.action
+                ok = self.executor.run_action(act_obj)
+                if not ok:
+                    overall_ok = False
+                    err_msg = f"{act_type} failed"
+                print(f"[EXECUTED]: {act_type} {act_keys or act_cmd or act_target} ({'ok' if ok else 'failed'})")
+                self.ui_log(f"[EXECUTED]: {intent.name} ({'ok' if ok else 'failed'})")
 
         self.update_ui("ready", f"Executed: {intent.name}", f"\"{utterance}\"")
-        return True
+        return True, overall_ok, action_records, err_msg
 
     def _settle(self, step) -> None:
         """Give a just-launched app time to open and take focus before the next step."""
@@ -542,15 +762,20 @@ class ComputerAutoDaemon:
             return False
         return None
 
+    def _is_guardrail_reply(self, utterance: str, confirmed: bool = False) -> bool:
+        if confirmed or self._pending_confirmation is None:
+            return False
+        return self._classify_confirmation(utterance) is not None
+
     def confirm_pending(self, approved: bool, asynchronous: Optional[bool] = None) -> None:
         """Resolve a pending guardrail confirmation from UI buttons or external callers."""
         if self._pending_confirmation is None:
             return
         reply = "yes" if approved else "no"
         if asynchronous is None:
-            asynchronous = self.ui is not None
+            asynchronous = self.ui is not None and not hasattr(self.ui, "_mock_name")
         if asynchronous:
-            threading.Thread(target=self.handle_command, args=(reply,), daemon=True).start()
+            self.enqueue_command(reply)
         else:
             self.handle_command(reply)
 
@@ -573,7 +798,7 @@ class ComputerAutoDaemon:
         cancel_event: threading.Event,
         confirmed: bool = False,
         pending_ctx: Optional[dict] = None,
-    ) -> None:
+    ) -> dict:
         """Execute Tier 2 visual navigation loop with panic cancellation and mid-loop guardrail support."""
         print("[TIER 2 VISION]: Unscripted command -> routing to vision model...")
         self.update_ui("executing", "Vision Agent Planning...", "Analyzing screen with vision model...")
@@ -584,13 +809,15 @@ class ComputerAutoDaemon:
         self._set_ui_visible(False)
 
         if pending_ctx is not None:
-            history = list(pending_ctx.get("history", []))
+            history_steps = list(pending_ctx.get("history", []))
+            recorded_actions = list(pending_ctx.get("recorded_actions", []))
             seen = set(pending_ctx.get("seen", ()))
             start_step = int(pending_ctx.get("step", 1))
             prev_thumb = pending_ctx.get("prev_thumb")
             approved_action = pending_ctx.get("action")
         else:
-            history = []
+            history_steps = []
+            recorded_actions = []
             seen = set()
             start_step = 1
             prev_thumb = None
@@ -605,7 +832,7 @@ class ComputerAutoDaemon:
 
         for step in range(start_step, max_steps + 1):
             if not self._is_run_active(run_id, cancel_event):
-                return
+                return {"parked": False, "success": False, "actions": recorded_actions, "error": "cancelled"}
 
             if approved_action is not None:
                 action = approved_action
@@ -624,28 +851,28 @@ class ComputerAutoDaemon:
                 # Tell the model when its last action changed nothing it can see, so it
                 # tries something else instead of assuming it worked.
                 thumb = _thumb(img)
-                if history and prev_thumb is not None and thumb is not None and prev_thumb == thumb:
-                    history[-1] += " (the screen did not change)"
+                if history_steps and prev_thumb is not None and thumb is not None and prev_thumb == thumb:
+                    history_steps[-1] += " (the screen did not change)"
                 prev_thumb = thumb
                 plan_kwargs = {"hwnd": hwnd}
                 if supports_origin:
                     plan_kwargs["origin"] = origin
                 if supports_cancel:
                     plan_kwargs["cancel_event"] = cancel_event
-                action = self.vision.plan_action(utterance, img, history, **plan_kwargs)
+                action = self.vision.plan_action(utterance, img, history_steps, **plan_kwargs)
                 if not self._is_run_active(run_id, cancel_event):  # Esc while the model was thinking: don't act
-                    return
+                    return {"parked": False, "success": False, "actions": recorded_actions, "error": "cancelled"}
 
             print(f"[AGENT STEP {step}]: {action.action} at ({action.x}, {action.y}) | {action.explanation}")
             self.ui_log(f"[AGENT STEP {step}]: {action.action} at ({action.x}, {action.y}) -> {action.explanation}")
 
             if action.action == "done":
                 self.update_ui("ready", "Visual Task Completed", action.explanation[:45])
-                return
+                return {"parked": False, "success": True, "actions": recorded_actions, "error": None}
             if action.action == "none":
                 self.update_ui("ready", "Vision Action Failed", action.explanation[:45])
                 self.ui_log(f"[TIER 2 VISION ERROR]: {action.explanation}")
-                return
+                return {"parked": False, "success": False, "actions": recorded_actions, "error": action.explanation}
 
             if not confirmed and self.guardrail.requires_confirmation(action.explanation):
                 warning = self.guardrail.format_confirmation_prompt(action.explanation)
@@ -654,7 +881,8 @@ class ComputerAutoDaemon:
                 self._pending_vision_context = {
                     "command": utterance,
                     "action": action,
-                    "history": list(history),
+                    "history": list(history_steps),
+                    "recorded_actions": list(recorded_actions),
                     "seen": set(seen),
                     "step": step,
                     "prev_thumb": prev_thumb,
@@ -662,7 +890,7 @@ class ComputerAutoDaemon:
                 self.update_ui("guardrail", "Confirmation Required", "Say 'yes' to confirm or 'no' to cancel")
                 self.ui_log(f"[GUARDRAIL]: {warning}")
                 self.tts.speak(warning)
-                return
+                return {"parked": True, "success": False, "actions": recorded_actions, "error": None}
 
             if action.action == "wait":
                 consecutive_waits += 1
@@ -670,10 +898,24 @@ class ComputerAutoDaemon:
                     print("[TIER 2 VISION]: waited too many times, stopping.")
                     self.update_ui("ready", "Stopped: action had no effect", action.explanation[:45])
                     self.ui_log("[TIER 2 VISION]: Consecutive waits exceeded limit -> stopped.")
-                    return
-                history.append(f"wait: {action.explanation}")
+                    return {
+                        "parked": False,
+                        "success": False,
+                        "actions": recorded_actions,
+                        "error": "Consecutive waits exceeded limit",
+                    }
+                recorded_actions.append({
+                    "action": "wait",
+                    "x": action.x,
+                    "y": action.y,
+                    "text": action.text,
+                    "keys": list(action.keys or []),
+                    "target": getattr(action, "target", None) or action.explanation,
+                    "explanation": action.explanation,
+                })
+                history_steps.append(f"wait: {action.explanation}")
                 if not self._sleep_interruptible(1.0, run_id, cancel_event):
-                    return
+                    return {"parked": False, "success": False, "actions": recorded_actions, "error": "cancelled"}
                 continue
 
             consecutive_waits = 0
@@ -693,116 +935,348 @@ class ComputerAutoDaemon:
                 print("[TIER 2 VISION]: same action had no effect, stopping.")
                 self.update_ui("ready", "Stopped: action had no effect", action.explanation[:45])
                 self.ui_log("[TIER 2 VISION]: Same action repeated with no effect -> stopped.")
-                return
+                return {
+                    "parked": False,
+                    "success": False,
+                    "actions": recorded_actions,
+                    "error": "Same action repeated with no effect",
+                }
 
             self.update_ui("executing", f"Vision step {step}: {action.action}", action.explanation[:45])
             ok = self.vision.execute_action(action)
+            recorded_actions.append({
+                "action": action.action,
+                "x": action.x,
+                "y": action.y,
+                "text": action.text,
+                "keys": list(action.keys or []),
+                "target": getattr(action, "target", None) or action.explanation,
+                "submit": bool(getattr(action, "submit", False)),
+                "direction": getattr(action, "direction", "down"),
+                "explanation": action.explanation,
+            })
             seen.add(sig)
             if ok and action.final:
                 print("[TIER 2 VISION]: final action done.")
                 self.update_ui("ready", "Visual Task Completed", action.explanation[:45])
-                return
-            history.append(f"{action.action}: {action.explanation}" + ("" if ok else " (FAILED)"))
+                return {"parked": False, "success": True, "actions": recorded_actions, "error": None}
+            history_steps.append(f"{action.action}: {action.explanation}" + ("" if ok else " (FAILED)"))
             if not self._sleep_interruptible(0.5, run_id, cancel_event):
-                return
+                return {"parked": False, "success": False, "actions": recorded_actions, "error": "cancelled"}
 
         self.update_ui("ready", "Vision stopped", f"Hit {max_steps}-step limit")
         self.ui_log(f"[TIER 2 VISION]: Stopped after {max_steps} steps.")
+        return {
+            "parked": False,
+            "success": False,
+            "actions": recorded_actions,
+            "error": f"Hit {max_steps}-step limit",
+        }
+
+    def enqueue_command(self, utterance: str, confirmed: bool = False) -> Optional[dict]:
+        """Push an utterance into the FIFO task queue without blocking the caller.
+
+        Guardrail confirmation replies ("yes"/"no"/"cancel") bypass the regular FIFO queue
+        and resolve the pending confirmation ahead of any queued tasks.
+        """
+        should_start = False
+        run_id = 0
+        cancel_event: Optional[threading.Event] = None
+        is_priority = False
+
+        with self._exec_lock:
+            if self._is_guardrail_reply(utterance, confirmed):
+                is_priority = True
+                item = {
+                    "id": self._next_task_id_unlocked(),
+                    "text": utterance,
+                    "confirmed": confirmed,
+                    "cancelled": False,
+                    "priority_guardrail": True,
+                    "done_event": threading.Event(),
+                }
+                self._priority_guardrail_queue.append(item)
+                if not self._is_executing:
+                    should_start = True
+                    self._is_executing = True
+                    self._run_id += 1
+                    run_id = self._run_id
+                    cancel_event = threading.Event()
+                    self._cancel_event = cancel_event
+                self._queue_cond.notify_all()
+            else:
+                item = {
+                    "id": self._next_task_id_unlocked(),
+                    "text": utterance,
+                    "confirmed": confirmed,
+                    "cancelled": False,
+                    "priority_guardrail": False,
+                    "done_event": threading.Event(),
+                }
+                self._task_queue.append(item)
+                if not self._is_executing and (
+                    self._pending_confirmation is None or len(self._task_queue) == 1
+                ):
+                    should_start = True
+                    self._is_executing = True
+                    self._run_id += 1
+                    run_id = self._run_id
+                    cancel_event = threading.Event()
+                    self._cancel_event = cancel_event
+                else:
+                    print(f"[QUEUE]: Queued \"{utterance}\" (position {len(self._task_queue)})")
+                    self.ui_log(f"[QUEUE]: Queued \"{utterance}\" (#{len(self._task_queue)})")
+                self._queue_cond.notify_all()
+
+        if not is_priority:
+            self._notify_queue_changed()
+
+        if should_start and cancel_event is not None:
+            threading.Thread(
+                target=self._drain_queue_worker,
+                args=(run_id, cancel_event),
+                daemon=True,
+            ).start()
+        return item
 
     def handle_command(self, utterance: str, confirmed: bool = False) -> None:
         """Process transcribed speech or typed command.
 
-        A guardrail interception parks the utterance in _pending_confirmation;
-        a follow-up "yes"/"confirm" re-enters here with confirmed=True, and
-        "no"/"cancel" drops it. This makes destructive intents (e.g. close
-        window) actually completable instead of a dead end.
+        If another task is currently running, the utterance is placed into the FIFO
+        task queue (never dropped) and executed in order by the active worker.
+        Guardrail confirmation replies ("yes"/"no"/"cancel") bypass the regular queue.
         """
+        queued_while_busy = False
+        is_priority = False
         with self._exec_lock:
+            is_priority = self._is_guardrail_reply(utterance, confirmed)
+            item = {
+                "id": self._next_task_id_unlocked(),
+                "text": utterance,
+                "confirmed": confirmed,
+                "cancelled": False,
+                "priority_guardrail": is_priority,
+                "done_event": threading.Event(),
+            }
             if self._is_executing:
-                print(f"[BUSY]: Action in progress, skipping \"{utterance}\"")
-                self.ui_log(f"[BUSY]: Action in progress, please wait...")
-                return
-            self._is_executing = True
-            self._run_id += 1
-            run_id = self._run_id
-            cancel_event = threading.Event()
-            self._cancel_event = cancel_event
-
-        try:
-            pending_vision_ctx = None
-            # Resolve any pending guardrail confirmation first
-            if self._pending_confirmation is not None and not confirmed:
-                decision = self._classify_confirmation(utterance)
-                if decision is True:
-                    pending = self._pending_confirmation
-                    pending_vision_ctx = self._pending_vision_context
-                    self._pending_confirmation = None
-                    self._pending_vision_context = None
-                    print(f"[GUARDRAIL]: Confirmed -> executing \"{pending}\"")
-                    self.ui_log(f"[GUARDRAIL]: Confirmed -> executing \"{pending}\"")
-                    utterance = pending
-                    confirmed = True
-                elif decision is False:
-                    self._pending_confirmation = None
-                    self._pending_vision_context = None
-                    print("[GUARDRAIL]: User cancelled the pending action.")
-                    self.update_ui("ready", "Action cancelled", "Confirmation declined")
-                    self.ui_log("[GUARDRAIL]: User cancelled the pending action.")
-                    self.tts.speak("Action cancelled.")
-                    return
+                queued_while_busy = True
+                if is_priority:
+                    self._priority_guardrail_queue.append(item)
                 else:
-                    # A different command supersedes the pending confirmation
-                    self._pending_confirmation = None
-                    self._pending_vision_context = None
+                    self._task_queue.append(item)
+                    print(f"[QUEUE]: Action in progress -> queued \"{utterance}\" (position {len(self._task_queue)})")
+                    self.ui_log(f"[QUEUE]: Queued \"{utterance}\" (#{len(self._task_queue)})")
+                self._queue_cond.notify_all()
+            else:
+                if is_priority:
+                    self._priority_guardrail_queue.insert(0, item)
+                else:
+                    self._task_queue.append(item)
+                self._is_executing = True
+                self._run_id += 1
+                run_id = self._run_id
+                cancel_event = threading.Event()
+                self._cancel_event = cancel_event
 
-            if pending_vision_ctx is not None:
-                self._run_vision_loop(
-                    utterance, run_id, cancel_event, confirmed=True, pending_ctx=pending_vision_ctx
-                )
-                return
+        if queued_while_busy:
+            if not is_priority:
+                self._notify_queue_changed()
+            return
 
-            norm = " ".join(re.sub(r"[^\w\s]", "", utterance).lower().split())
-            if norm in self.REPEAT_WORDS:
-                if not self._last_command:
-                    self.ui_log("[ANSWER]: Nothing to repeat yet")
-                    return
-                utterance = self._last_command
-            elif norm:
-                self._last_command = utterance
-            print(f"[UTTERANCE]: \"{utterance}\"")
-            self.update_ui("processing", f"Routing: \"{utterance}\"", "Classifying intent...")
-            self.ui_log(f"[COMMAND]: Processing \"{utterance}\"")
+        self._drain_queue_worker(run_id, cancel_event)
 
-            route = self.router.route(utterance)
-            if not route.is_vision and route.intent is None:
-                self.update_ui("ready", "Ready — No command heard", "")
-                return
+    def _drain_queue_worker(self, run_id: int, cancel_event: threading.Event) -> None:
+        """Process priority guardrail replies and the FIFO task queue in order."""
+        try:
+            while True:
+                with self._exec_lock:
+                    if cancel_event.is_set() or self._run_id != run_id or not self._is_executing:
+                        return
+                    if self._priority_guardrail_queue:
+                        item = self._priority_guardrail_queue.pop(0)
+                        is_priority = True
+                    elif self._task_queue:
+                        item = self._task_queue.pop(0)
+                        is_priority = False
+                    else:
+                        self._running_task = None
+                        self._is_executing = False
+                        break
 
-            # 1. Tier 1: deterministic intents - one, or a chain like "open notepad and type hi"
-            steps, rest = ([route], "") if not route.is_vision else self._split_compound(utterance)
-            for i, r in enumerate(steps):
-                if not self._is_run_active(run_id, cancel_event):
-                    return
-                if i:
-                    self._settle(steps[i - 1])
-                if not self._run_intent(r.intent, r.command, confirmed):
-                    return
-            if steps and rest:
-                self._settle(steps[-1])
-                utterance = rest
-                print(f"[TIER 2 VISION]: rest of the command: \"{rest}\"")
+                    if item.get("cancelled"):
+                        ev = item.get("done_event")
+                        if ev is not None:
+                            ev.set()
+                        continue
 
-            # 2. Tier 2: Unscripted Visual Navigation via vision model
-            if rest:
-                self._run_vision_loop(utterance, run_id, cancel_event, confirmed=confirmed)
+                    if not is_priority:
+                        self._running_task = {"id": str(item["id"]), "text": str(item["text"])}
+
+                self._notify_queue_changed()
+                try:
+                    parked_on_guardrail = self._execute_single_command(
+                        item["text"],
+                        run_id=run_id,
+                        cancel_event=cancel_event,
+                        confirmed=bool(item.get("confirmed", False)),
+                    )
+                finally:
+                    ev = item.get("done_event")
+                    if ev is not None:
+                        ev.set()
+
+                if parked_on_guardrail:
+                    with self._exec_lock:
+                        if (
+                            self._pending_confirmation is not None
+                            and not self._priority_guardrail_queue
+                            and self._run_id == run_id
+                        ):
+                            self._running_task = None
+                            self._is_executing = False
+                            break
         finally:
             is_current = False
             with self._exec_lock:
                 if self._run_id == run_id:
                     self._is_executing = False
+                    self._running_task = None
                     is_current = True
+                    self._queue_cond.notify_all()
             if is_current:
                 self._set_ui_visible(True)
+                self._notify_queue_changed()
+
+    def _execute_single_command(
+        self,
+        utterance: str,
+        run_id: int,
+        cancel_event: threading.Event,
+        confirmed: bool = False,
+    ) -> bool:
+        """Execute a single command from the queue.
+
+        Returns True if execution parked on a guardrail confirmation prompt, False otherwise.
+        """
+        start_t = time.monotonic()
+        pending_vision_ctx = None
+
+        # Resolve any pending guardrail confirmation first
+        if self._pending_confirmation is not None and not confirmed:
+            decision = self._classify_confirmation(utterance)
+            if decision is True:
+                pending = self._pending_confirmation
+                pending_vision_ctx = self._pending_vision_context
+                self._pending_confirmation = None
+                self._pending_vision_context = None
+                print(f"[GUARDRAIL]: Confirmed -> executing \"{pending}\"")
+                self.ui_log(f"[GUARDRAIL]: Confirmed -> executing \"{pending}\"")
+                utterance = pending
+                confirmed = True
+            elif decision is False:
+                self._pending_confirmation = None
+                self._pending_vision_context = None
+                print("[GUARDRAIL]: User cancelled the pending action.")
+                self.update_ui("ready", "Action cancelled", "Confirmation declined")
+                self.ui_log("[GUARDRAIL]: User cancelled the pending action.")
+                self.tts.speak("Action cancelled.")
+                return False
+            else:
+                # A different command supersedes the pending confirmation
+                self._pending_confirmation = None
+                self._pending_vision_context = None
+
+        if pending_vision_ctx is not None:
+            vision_res = self._run_vision_loop(
+                utterance, run_id, cancel_event, confirmed=True, pending_ctx=pending_vision_ctx
+            )
+            if vision_res.get("parked"):
+                return True
+            duration_ms = int(round((time.monotonic() - start_t) * 1000))
+            self._record_history(
+                utterance=utterance,
+                route="vision",
+                intent_name=None,
+                actions=vision_res.get("actions", []),
+                success=bool(vision_res.get("success", False)),
+                duration_ms=duration_ms,
+                error=vision_res.get("error"),
+            )
+            return False
+
+        norm = " ".join(re.sub(r"[^\w\s]", "", utterance).lower().split())
+        if norm in self.REPEAT_WORDS:
+            if not self._last_command:
+                self.ui_log("[ANSWER]: Nothing to repeat yet")
+                return False
+            utterance = self._last_command
+        elif norm:
+            self._last_command = utterance
+        print(f"[UTTERANCE]: \"{utterance}\"")
+        self.update_ui("processing", f"Routing: \"{utterance}\"", "Classifying intent...")
+        self.ui_log(f"[COMMAND]: Processing \"{utterance}\"")
+
+        route = self.router.route(utterance)
+        if not route.is_vision and route.intent is None:
+            self.update_ui("ready", "Ready — No command heard", "")
+            return False
+
+        orig_utterance = utterance
+        recorded_actions: list = []
+        overall_ok = True
+        error_msg: Optional[str] = None
+
+        # 1. Tier 1: deterministic intents - one, or a chain like "open notepad and type hi"
+        steps, rest = ([route], "") if not route.is_vision else self._split_compound(utterance)
+        for i, r in enumerate(steps):
+            if not self._is_run_active(run_id, cancel_event):
+                return False
+            if i:
+                self._settle(steps[i - 1])
+            completed, step_ok, step_actions, step_err = self._run_intent(r.intent, r.command, confirmed)
+            if not completed:
+                return True
+            recorded_actions.extend(step_actions)
+            if not step_ok:
+                overall_ok = False
+                if error_msg is None:
+                    error_msg = step_err
+        if steps and rest:
+            self._settle(steps[-1])
+            utterance = rest
+            print(f"[TIER 2 VISION]: rest of the command: \"{rest}\"")
+
+        # 2. Tier 2: Unscripted Visual Navigation via vision model
+        if rest:
+            vision_res = self._run_vision_loop(utterance, run_id, cancel_event, confirmed=confirmed)
+            if vision_res.get("parked"):
+                return True
+            recorded_actions.extend(vision_res.get("actions", []))
+            if not vision_res.get("success", False):
+                overall_ok = False
+                if error_msg is None:
+                    error_msg = vision_res.get("error")
+            route_name = "vision"
+            intent_name = None
+        else:
+            route_name = self._infer_route_name(steps[0]) if steps else "keyword"
+            intent_name = (
+                steps[0].intent.name
+                if len(steps) == 1 and steps[0].intent
+                else (",".join(s.intent.name for s in steps if s.intent) or None)
+            )
+
+        duration_ms = int(round((time.monotonic() - start_t) * 1000))
+        self._record_history(
+            utterance=orig_utterance,
+            route=route_name,
+            intent_name=intent_name,
+            actions=recorded_actions,
+            success=overall_ok,
+            duration_ms=duration_ms,
+            error=error_msg,
+        )
+        return False
 
 
     def shutdown(self) -> None:

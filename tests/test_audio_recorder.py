@@ -235,3 +235,17 @@ def test_vad_adaptive_post_speech_silence_ignores_low_room_noise():
     time.sleep(0.05)
     assert fired == [1]
 
+
+def test_vad_detects_immediate_speech_during_calibration_window():
+    """Speaking immediately after mic re-arm (<0.3s) must detect voice instead of calibrating speech as noise."""
+    import time
+    recorder = AudioRecorder(sample_rate=16000)
+    recorder.is_recording = True
+    recorder._recording_start_time = time.time()
+
+    immediate_speech = np.ones((1600, 1), dtype=np.float32) * 0.035
+    recorder.feed_audio_chunk(immediate_speech)
+    assert recorder._speech_detected is True
+    assert recorder._noise is None
+
+

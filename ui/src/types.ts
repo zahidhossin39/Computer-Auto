@@ -58,6 +58,59 @@ export interface UpdateStatus {
   error?: string;
 }
 
+export interface QueueItem {
+  id: string;
+  text: string;
+}
+
+export interface QueueState {
+  running: QueueItem | null;
+  pending: QueueItem[];
+}
+
+export interface LearnedCommandStep {
+  type: string;
+  command?: string | null;
+  target?: string | null;
+  fallback_target?: string | null;
+  args?: string[];
+  keys?: string[];
+  text?: string | null;
+  wait_ms?: number | null;
+}
+
+export interface LearnedCommand {
+  id: string;
+  name: string;
+  description: string;
+  triggers: string[];
+  steps: LearnedCommandStep[];
+  source_event_ids: string[];
+  created_at: string;
+  uses: number;
+  enabled: boolean;
+  suggested?: boolean;
+}
+
+export interface ModelInfo {
+  id: string;
+  name: string;
+  provider: string;
+  context_length?: number | null;
+  input_modalities?: string[];
+  pricing_prompt?: string | null;
+  pricing_completion?: string | null;
+  supports_vision: boolean;
+  supports_audio: boolean;
+  modalities_inferred?: boolean;
+}
+
+export interface ConnectionTestResult {
+  ok: boolean;
+  message: string;
+  models_count?: number;
+}
+
 export interface BridgeStateEvent {
   event: "state";
   state: MascotState;
@@ -94,10 +147,29 @@ export interface BridgeDownloadProgressEvent {
   stage: string;
 }
 
+export interface BridgeQueueEvent {
+  event: "queue";
+  pending: QueueItem[];
+  running: QueueItem | null;
+}
+
+export interface BridgeLearnedEvent {
+  event: "learned";
+  data: LearnedCommand[];
+}
+
+export interface BridgeMcpConfigEvent {
+  event: "mcp_config";
+  data: string;
+}
+
 export type BridgeEvent =
   | BridgeStateEvent
   | BridgeAudioLevelEvent
   | BridgeLogEvent
   | BridgeSettingsEvent
   | BridgeIntentsEvent
-  | BridgeDownloadProgressEvent;
+  | BridgeDownloadProgressEvent
+  | BridgeQueueEvent
+  | BridgeLearnedEvent
+  | BridgeMcpConfigEvent;
