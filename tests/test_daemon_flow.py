@@ -564,3 +564,256 @@ def test_download_offline_model_and_cancel(monkeypatch, tmp_path):
     monkeypatch.setattr("main.download_parakeet_model", fake_cancel_download)
     assert daemon.download_offline_model() is False
     assert "Download canceled" in daemon.ui.update_state.call_args[0][1]
+
+
+def test_second_utterance_while_task_one_runs_is_queued_and_executed_after():
+    """(a) A second utterance arriving while task 1 runs is queued and executed after it."""
+    import threading
+
+    daemon = _make_daemon()
+    daemon.executor = MagicMock()
+
+    task1_started = threading.Event()
+    task1_release = threading.Event()
+    executed_order = []
+
+    def fake_exec(cmd):
+        executed_order.append(cmd)
+        if cmd == "volume_step_up":
+            task1_started.set()
+            task1_release.wait(timeout=3.0)
+        return True
+
+    daemon.executor.execute_system_action.side_effect = fake_exec
+
+    queue_events = []
+    daemon.on_queue_change = lambda pending, running: queue_events.append(
+        (list(pending), dict(running) if running else None)
+    )
+
+    t1 = threading.Thread(target=daemon.handle_command, args=("volume up",), daemon=True)
+    t1.start()
+    assert task1_started.wait(timeout=2.0)
+
+    # Second utterance arrives while task 1 is still executing
+    daemon.handle_command("volume down")
+
+    pending_snap, running_snap = daemon.get_queue_snapshot()
+    assert running_snap is not None and running_snap["text"] == "volume up"
+    assert len(pending_snap) == 1 and pending_snap[0]["text"] == "volume down"
+
+    # Let task 1 complete; worker must immediately drain task 2 in FIFO order
+    task1_release.set()
+    t1.join(timeout=2.0)
+    assert daemon.wait_for_queue(timeout=2.0)
+
+    assert executed_order == ["volume_step_up", "volume_step_down"]
+    final_pending, final_running = daemon.get_queue_snapshot()
+    assert final_pending == []
+    assert final_running is None
+    assert any(
+        len(p) == 1 and p[0]["text"] == "volume down" and r and r["text"] == "volume up"
+        for p, r in queue_events
+    )
+
+
+def test_three_rapid_utterances_run_in_fifo_order_none_dropped():
+    """(b) Three rapid utterances run in order with none dropped."""
+    import threading
+
+    daemon = _make_daemon()
+    daemon.executor = MagicMock()
+
+    first_started = threading.Event()
+    release_first = threading.Event()
+    executed_order = []
+
+    def fake_exec(cmd):
+        executed_order.append(cmd)
+        if cmd == "volume_step_up":
+            first_started.set()
+            release_first.wait(timeout=3.0)
+        return True
+
+    daemon.executor.execute_system_action.side_effect = fake_exec
+
+    daemon.on_manual_command("volume up")
+    assert first_started.wait(timeout=2.0)
+    daemon.on_manual_command("volume down")
+    daemon.on_manual_command("mute")
+
+    pending, running = daemon.get_queue_snapshot()
+    assert running is not None and running["text"] == "volume up"
+    assert [item["text"] for item in pending] == ["volume down", "mute"]
+
+    release_first.set()
+    assert daemon.wait_for_queue(timeout=3.0)
+    assert executed_order == ["volume_step_up", "volume_step_down", "volume_toggle_mute"]
+
+
+def test_panic_cancels_running_task_and_clears_queue():
+    """(c) Panic cancels the running task AND clears the pending queue."""
+    import threading
+
+    daemon = _make_daemon()
+    daemon.executor = MagicMock()
+
+    first_started = threading.Event()
+    release_first = threading.Event()
+    executed_order = []
+
+    def fake_exec(cmd):
+        executed_order.append(cmd)
+        if cmd == "volume_step_up":
+            first_started.set()
+            release_first.wait(timeout=3.0)
+        return True
+
+    daemon.executor.execute_system_action.side_effect = fake_exec
+
+    daemon.enqueue_command("volume up")
+    assert first_started.wait(timeout=2.0)
+    daemon.enqueue_command("volume down")
+    daemon.enqueue_command("mute")
+
+    pending_before, running_before = daemon.get_queue_snapshot()
+    assert len(pending_before) == 2
+    assert running_before is not None
+
+    daemon.on_panic_key()
+    pending_after, running_after = daemon.get_queue_snapshot()
+    assert pending_after == []
+    assert running_after is None
+
+    release_first.set()
+    time.sleep(0.15)
+    # Only the first task that was already mid-flight ran; queued tasks were cleared
+    assert executed_order == ["volume_step_up"]
+
+
+def test_guardrail_reply_bypasses_queue():
+    """(d) Guardrail confirmation ('yes'/'no'/'cancel') goes to pending confirmation, not back of queue."""
+    import threading
+
+    daemon = _make_daemon()
+    daemon.executor = MagicMock()
+
+    guardrail_checked = threading.Event()
+    allow_guardrail_finish = threading.Event()
+    orig_requires = daemon.guardrail.requires_confirmation
+
+    def slow_requires(utterance, is_destructive=False):
+        res = orig_requires(utterance, is_destructive)
+        if utterance == "close window":
+            guardrail_checked.set()
+            allow_guardrail_finish.wait(timeout=3.0)
+        return res
+
+    daemon.guardrail.requires_confirmation = slow_requires
+
+    executed = []
+    daemon.executor.execute_system_action.side_effect = lambda cmd: executed.append(cmd) or True
+
+    # Start destructive task 1 ("close window"), and while it is running, queue task 2 ("volume up")
+    t1 = threading.Thread(target=daemon.handle_command, args=("close window",), daemon=True)
+    t1.start()
+    assert guardrail_checked.wait(timeout=2.0)
+
+    daemon.enqueue_command("volume up")
+    allow_guardrail_finish.set()
+    t1.join(timeout=2.0)
+
+    # Task 1 is now parked on guardrail confirmation, while "volume up" remains queued
+    assert daemon._pending_confirmation == "close window"
+    pending, _ = daemon.get_queue_snapshot()
+    assert [item["text"] for item in pending] == ["volume up"]
+    assert executed == []
+
+    # Now user says "yes": it must bypass "volume up", confirm "close window" first, then run "volume up"
+    daemon.handle_command("yes")
+    assert daemon.wait_for_queue(timeout=2.0)
+    assert daemon._pending_confirmation is None
+    assert executed == ["window_close_active", "volume_step_up"]
+
+
+def test_continuous_mic_rearms_while_long_task_runs():
+    """Mic re-arms immediately after transcription while a slow task continues executing."""
+    import threading
+
+    daemon = _make_daemon()
+    daemon.continuous = True
+    daemon.recorder.stop.side_effect = None
+    daemon.recorder.stop.return_value = np.ones(8000, dtype=np.float32) * 0.2
+    daemon.recognizer = MagicMock()
+    daemon.recognizer.is_ready = True
+    daemon.recognizer.transcribe.return_value = "volume up"
+
+    task_started = threading.Event()
+    task_release = threading.Event()
+
+    def slow_action(cmd):
+        task_started.set()
+        task_release.wait(timeout=3.0)
+        return True
+
+    daemon.executor = MagicMock()
+    daemon.executor.execute_system_action.side_effect = slow_action
+
+    worker = threading.Thread(target=daemon._process_recording_worker, daemon=True)
+    worker.start()
+
+    assert task_started.wait(timeout=2.0)
+    # Wait for _process_recording_worker to finish and re-arm the mic while slow_action is still blocked
+    worker.join(timeout=2.0)
+    assert not worker.is_alive()
+    assert daemon._listening_active is True
+    assert daemon.recorder.is_recording is True
+    assert daemon._is_executing is True
+
+    task_release.set()
+    assert daemon.wait_for_queue(timeout=2.0)
+
+
+def test_history_hook_called_and_never_raises(monkeypatch):
+    """history.record_event is called after Tier 1 and Vision commands, and exceptions are swallowed."""
+    from src.vision.agent import VisionAction
+
+    daemon = _make_daemon()
+    daemon.executor = MagicMock()
+    daemon.executor.execute_system_action.return_value = True
+
+    recorded = []
+    fake_history = MagicMock()
+    fake_history.record_event.side_effect = lambda **kw: recorded.append(kw)
+    monkeypatch.setattr("main.history", fake_history)
+
+    daemon.handle_command("volume up")
+    assert len(recorded) == 1
+    assert recorded[0]["utterance"] == "volume up"
+    assert recorded[0]["route"] == "keyword"
+    assert recorded[0]["intent_name"] == "volume_up"
+    assert recorded[0]["success"] is True
+    assert isinstance(recorded[0]["duration_ms"], int)
+
+    # Vision command records steps
+    daemon.capture = MagicMock()
+    daemon.capture.grab_screen.return_value = (MagicMock(), 100, 100)
+    daemon.vision = MagicMock()
+    daemon.vision.plan_action.return_value = VisionAction(
+        action="click", x=42, y=84, final=True, explanation="Click Submit"
+    )
+    daemon.vision.execute_action.return_value = True
+
+    daemon.handle_command("click the custom submit widget")
+    assert len(recorded) == 2
+    assert recorded[1]["route"] == "vision"
+    assert recorded[1]["intent_name"] is None
+    assert recorded[1]["success"] is True
+    assert recorded[1]["actions"][0]["action"] == "click"
+    assert recorded[1]["actions"][0]["x"] == 42
+    assert recorded[1]["actions"][0]["y"] == 84
+
+    # Raising inside record_event must never crash handle_command
+    fake_history.record_event.side_effect = RuntimeError("disk full")
+    daemon.handle_command("volume down")
+    daemon.executor.execute_system_action.assert_called_with("volume_step_down")

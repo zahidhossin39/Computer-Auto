@@ -70,6 +70,13 @@ class _BridgeUIAdapter:
     def set_ghost(self, ghost: bool) -> None:
         pass
 
+    def update_queue(
+        self,
+        pending: List[Dict[str, str]],
+        running: Optional[Dict[str, str]] = None,
+    ) -> None:
+        self._bridge.emit_queue(pending, running)
+
 
 class StdioBridge:
     """JSON-Lines stdio bridge wrapping ComputerAutoDaemon without Tkinter."""
@@ -82,6 +89,7 @@ class StdioBridge:
         self._out: TextIO = out_stream or sys.stdout
         self._write_lock = threading.Lock()
         self._download_thread: Optional[threading.Thread] = None
+        self._queue_emit_seq = 0
 
         if daemon is None:
             from main import ComputerAutoDaemon
@@ -173,6 +181,106 @@ class StdioBridge:
             "total": int(total),
             "stage": str(stage),
         })
+
+    def _get_daemon_queue_snapshot(self) -> tuple[List[Dict[str, str]], Optional[Dict[str, str]]]:
+        snap_fn = getattr(self.daemon, "get_queue_snapshot", None)
+        if callable(snap_fn):
+            try:
+                res = snap_fn()
+                if (
+                    isinstance(res, tuple)
+                    and len(res) == 2
+                    and isinstance(res[0], list)
+                    and (res[1] is None or isinstance(res[1], dict))
+                ):
+                    return res[0], res[1]
+            except Exception:
+                pass
+        return [], None
+
+    def emit_queue(
+        self,
+        pending: Optional[List[Dict[str, str]]] = None,
+        running: Optional[Dict[str, str]] = None,
+    ) -> None:
+        if pending is None and running is None:
+            pending, running = self._get_daemon_queue_snapshot()
+        norm_pending = [
+            {"id": str(item.get("id", "")), "text": str(item.get("text", ""))}
+            for item in (pending or [])
+            if isinstance(item, dict)
+        ]
+        norm_running = (
+            {"id": str(running.get("id", "")), "text": str(running.get("text", ""))}
+            if isinstance(running, dict)
+            else None
+        )
+        self._queue_emit_seq += 1
+        self.emit({
+            "event": "queue",
+            "pending": norm_pending,
+            "running": norm_running,
+        })
+
+    @staticmethod
+    def _get_learned_module() -> Optional[Any]:
+        try:
+            from src import learned
+            return learned
+        except Exception:
+            return None
+
+    def _call_learned_helper(self, fn_name: str, *args: Any) -> List[Dict[str, Any]]:
+        mod = self._get_learned_module()
+        if mod is None:
+            return []
+        fn = getattr(mod, fn_name, None)
+        if callable(fn):
+            try:
+                res = fn(*args)
+                if isinstance(res, list):
+                    return res
+            except Exception:
+                pass
+        list_fn = getattr(mod, "bridge_list_learned", None) or getattr(mod, "list_commands", None)
+        if callable(list_fn):
+            try:
+                res = list_fn()
+                if isinstance(res, list):
+                    return res
+            except Exception:
+                pass
+        return []
+
+    def emit_learned(self, data: Optional[List[Dict[str, Any]]] = None) -> None:
+        if data is None:
+            data = self._call_learned_helper("bridge_list_learned")
+        self.emit({"event": "learned", "data": list(data)})
+
+    def emit_mcp_config(self, snippet: Optional[str] = None) -> None:
+        if snippet is None:
+            mod = self._get_learned_module()
+            fn = getattr(mod, "get_mcp_config_snippet", None) if mod is not None else None
+            if callable(fn):
+                try:
+                    snippet = str(fn())
+                except Exception:
+                    snippet = None
+            if not snippet:
+                repo_root = str(Path(__file__).resolve().parent.parent)
+                snippet = json.dumps(
+                    {
+                        "mcpServers": {
+                            "computer-auto": {
+                                "command": "python",
+                                "args": ["-m", "src.mcp_server"],
+                                "cwd": repo_root,
+                            }
+                        }
+                    },
+                    indent=2,
+                )
+        self.emit({"event": "mcp_config", "data": str(snippet)})
 
     def _apply_settings(self, raw: Dict[str, Any]) -> None:
         """Persist settings and hot-reload daemon components without restart."""
@@ -266,10 +374,41 @@ class StdioBridge:
             self.emit_state(*self._current_state)
             self.emit_settings()
             self.emit_intents()
+            self.emit_queue()
+            if self._get_learned_module() is not None:
+                self.emit_learned()
+                self.emit_mcp_config()
         elif cmd == "run_command":
             text = str(msg.get("text") or "").strip()
             if text:
                 self.daemon.on_manual_command(text)
+        elif cmd == "clear_queue":
+            prev_seq = self._queue_emit_seq
+            if hasattr(self.daemon, "clear_queue"):
+                self.daemon.clear_queue()
+            if self._queue_emit_seq == prev_seq:
+                self.emit_queue([], None)
+        elif cmd == "remove_queued":
+            task_id = str(msg.get("id") or "").strip()
+            prev_seq = self._queue_emit_seq
+            if hasattr(self.daemon, "remove_queued"):
+                self.daemon.remove_queued(task_id)
+            if self._queue_emit_seq == prev_seq:
+                self.emit_queue(*self._get_daemon_queue_snapshot())
+        elif cmd == "list_learned":
+            self.emit_learned()
+        elif cmd == "approve_learned":
+            cmd_id = str(msg.get("id") or "").strip()
+            self.emit_learned(self._call_learned_helper("bridge_approve_learned", cmd_id))
+        elif cmd == "toggle_learned":
+            cmd_id = str(msg.get("id") or "").strip()
+            enabled = bool(msg.get("enabled", True))
+            self.emit_learned(self._call_learned_helper("bridge_toggle_learned", cmd_id, enabled))
+        elif cmd == "delete_learned":
+            cmd_id = str(msg.get("id") or "").strip()
+            self.emit_learned(self._call_learned_helper("bridge_delete_learned", cmd_id))
+        elif cmd == "get_mcp_config":
+            self.emit_mcp_config()
         elif cmd == "toggle_mic":
             self.daemon.toggle_session()
         elif cmd == "start_mic":
@@ -311,10 +450,14 @@ class StdioBridge:
             except Exception as e:
                 self.emit_log(f"[BRIDGE]: Hotkey listener unavailable ({e})", kind="error")
 
-        # Emit initial state/settings/intents immediately on startup
+        # Emit initial state/settings/intents/queue immediately on startup
         self.emit_state(*self._current_state)
         self.emit_settings()
         self.emit_intents()
+        self.emit_queue()
+        if self._get_learned_module() is not None:
+            self.emit_learned()
+            self.emit_mcp_config()
 
         try:
             for raw_line in stream:
@@ -334,6 +477,12 @@ class StdioBridge:
         except KeyboardInterrupt:
             pass
         finally:
+            try:
+                wait_fn = getattr(self.daemon, "wait_for_queue", None)
+                if callable(wait_fn):
+                    wait_fn(timeout=15.0)
+            except Exception:
+                pass
             try:
                 self.daemon.shutdown()
             except Exception:
