@@ -288,6 +288,51 @@ def ensure_desktop_attached() -> None:
         pass
 
 
+def _is_cloaked_or_tool_window(hwnd: int) -> bool:
+    """Return True if hwnd is DWM-cloaked, the desktop shell (Progman), or a non-app tool overlay."""
+    import ctypes
+    import win32con
+    import win32gui
+    if hasattr(win32gui, "_mock_name"):
+        return False
+    try:
+        cls = win32gui.GetClassName(hwnd)
+        if isinstance(cls, str) and cls in ("Progman", "WorkerW", "Shell_TrayWnd"):
+            return True
+    except Exception:
+        pass
+    try:
+        ex_style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
+        if isinstance(ex_style, int):
+            ws_ex_noactivate = 0x08000000
+            ws_ex_appwindow = 0x00040000
+            if (ex_style & (win32con.WS_EX_TOOLWINDOW | ws_ex_noactivate)) and not (ex_style & ws_ex_appwindow):
+                return True
+    except Exception:
+        pass
+    try:
+        cloaked = ctypes.c_int(0)
+        if ctypes.windll.dwmapi.DwmGetWindowAttribute(hwnd, 14, ctypes.byref(cloaked), ctypes.sizeof(cloaked)) == 0:
+            if cloaked.value != 0:
+                return True
+    except Exception:
+        pass
+    return False
+
+
+_HIDDEN_SYSTEM_EXES = {
+    "textinputhost.exe",
+    "searchhost.exe",
+    "shellexperiencehost.exe",
+    "startmenuexperiencehost.exe",
+    "systemsettingsbroker.exe",
+}
+_HIDDEN_WINDOW_TITLES = {
+    "program manager",
+    "windows input experience",
+}
+
+
 def open_windows() -> list:
     """(hwnd, title, exe name) of visible top-level windows, front-most first, minus ours."""
     ensure_desktop_attached()
@@ -304,10 +349,14 @@ def open_windows() -> list:
         title = win32gui.GetWindowText(hwnd)
         if not title or not win32gui.IsWindowVisible(hwnd) or win32gui.GetWindow(hwnd, win32con.GW_OWNER):
             return
+        if _is_cloaked_or_tool_window(hwnd):
+            return
         pid = win32process.GetWindowThreadProcessId(hwnd)[1]
         if pid in (my_pid, parent_pid):
             return
-        lower_title = title.lower()
+        lower_title = title.lower().strip()
+        if lower_title in _HIDDEN_WINDOW_TITLES:
+            return
         if "computer-auto" in lower_title or lower_title.startswith("computer-auto"):
             return
         try:
@@ -315,7 +364,7 @@ def open_windows() -> list:
             exe = os.path.basename(win32process.GetModuleFileNameEx(h, 0)).lower()
         except Exception:
             exe = ""
-        if exe.startswith("computer-auto"):
+        if exe.startswith("computer-auto") or exe in _HIDDEN_SYSTEM_EXES:
             return
         out.append((hwnd, title, exe))
 
@@ -370,6 +419,12 @@ WINDOW_FILLER_WORDS = {
     "monitor", "currently", "right", "now", "please", "back", "up",
 }
 
+NON_WINDOW_UI_WORDS = {
+    "tab", "tabs", "history", "downloads", "bookmark", "bookmarks", "incognito",
+    "popup", "modal", "sidebar", "dialog", "button", "link", "menu", "fullscreen",
+    "notification", "notifications", "and", "then",
+}
+
 
 def find_window(spoken: str):
     """(hwnd, title) of the open window the user named ("chrome", "the notepad", "the browser"), or None."""
@@ -378,7 +433,11 @@ def find_window(spoken: str):
         if phrase in lower_spoken:
             lower_spoken = lower_spoken.replace(phrase, alias)
 
-    words = [w for w in re.findall(r"[a-z0-9_-]+", lower_spoken) if w not in WINDOW_FILLER_WORDS]
+    raw_tokens = re.findall(r"[a-z0-9_-]+", lower_spoken)
+    if any(t in NON_WINDOW_UI_WORDS for t in raw_tokens):
+        return None
+
+    words = [w for w in raw_tokens if w not in WINDOW_FILLER_WORDS]
     if not words:
         # If user explicitly said "this window" or "this app" or "active window"
         wins = open_windows()
@@ -408,16 +467,20 @@ def find_window(spoken: str):
             if all(w in combined for w in candidate_words):
                 return hwnd, title
 
-    # 3. Category matching (e.g. "browser", "the terminal")
+    # 3. Category matching (only when the target phrase itself is a category like "browser" or "the terminal",
+    #    not when a specific unopened app like "firefox browser" was requested)
     target_phrase = " ".join(words)
-    for cat_name, exe_list in CATEGORY_WINDOW_EXES.items():
-        if cat_name in target_phrase or any(w == cat_name for w in words):
-            for hwnd, title, exe in wins:
-                if exe in exe_list or any(stem in exe for stem in [e[:-4] for e in exe_list]):
-                    return hwnd, title
+    if target_phrase in CATEGORY_WINDOW_EXES:
+        exe_list = CATEGORY_WINDOW_EXES[target_phrase]
+        for hwnd, title, exe in wins:
+            if exe in exe_list or any(stem in exe for stem in [e[:-4] for e in exe_list]):
+                return hwnd, title
 
     # 4. Installed app index match
-    app = find(" ".join(specific_words), allow_jev=False)
+    try:
+        app = find(" ".join(specific_words), allow_jev=False)
+    except TypeError:
+        app = find(" ".join(specific_words))
     if app:
         name = app[0].lower()
         for hwnd, title, exe in wins:

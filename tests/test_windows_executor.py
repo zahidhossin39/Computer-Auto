@@ -257,3 +257,26 @@ def test_run_action_open_app_focuses_existing_window(executor, monkeypatch):
         mock_focus.assert_called_once_with(777)
         mock_shell.assert_not_called()
 
+
+def test_focus_window_succeeds_even_when_attach_thread_input_denied(executor):
+    """When foreground window is elevated and AttachThreadInput raises Access is denied,
+    focus_window must still proceed to BringWindowToTop/SetForegroundWindow and return True."""
+    import sys
+
+    mock_gui = Mock()
+    mock_gui.IsIconic.return_value = False
+    mock_gui.GetForegroundWindow.side_effect = [500, 999]
+    mock_process = Mock()
+    mock_process.GetWindowThreadProcessId.return_value = (222, 333)
+    mock_process.AttachThreadInput.side_effect = RuntimeError("Access is denied")
+    mock_api = Mock()
+    mock_api.GetCurrentThreadId.return_value = 111
+
+    with patch("src.executor.windows.win32gui", mock_gui), \
+         patch("src.executor.windows.win32process", mock_process), \
+         patch.dict(sys.modules, {"win32api": mock_api}), \
+         patch("src.executor.windows.win32con", Mock(SW_RESTORE=9)):
+        assert executor.focus_window(999) is True
+    mock_gui.SetForegroundWindow.assert_called_once_with(999)
+
+

@@ -265,6 +265,8 @@ intents:
       - "new tab"
       - "open new tab"
       - "open a new tab"
+      - "new browser tab"
+      - "open new browser tab"
     action:
       type: hotkey
       keys: ["ctrl", "t"]
@@ -274,6 +276,9 @@ intents:
       - "close tab"
       - "close this tab"
       - "close the tab"
+      - "close current tab"
+      - "close browser tab"
+      - "close the browser tab"
       - "close website"
       - "close this website"
       - "close this website only"
@@ -289,6 +294,8 @@ intents:
       - "reopen tab"
       - "reopen closed tab"
       - "restore tab"
+      - "restore closed tab"
+      - "reopen last tab"
     action:
       type: hotkey
       keys: ["ctrl", "shift", "t"]
@@ -376,6 +383,7 @@ intents:
       - "show history"
       - "open history"
       - "browser history"
+      - "open browser history"
     action:
       type: hotkey
       keys: ["ctrl", "h"]
@@ -595,6 +603,7 @@ intents:
     triggers:
       - "open settings"
       - "windows settings"
+      - "open windows settings"
     action:
       type: hotkey
       keys: ["win", "i"]
@@ -674,6 +683,7 @@ intents:
     triggers:
       - "notifications"
       - "show notifications"
+      - "open notifications"
     action:
       type: hotkey
       keys: ["win", "n"]
@@ -681,7 +691,9 @@ intents:
     category: hotkey
     triggers:
       - "quick settings"
+      - "open quick settings"
       - "action center"
+      - "open action center"
     action:
       type: hotkey
       keys: ["win", "a"]

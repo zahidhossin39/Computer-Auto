@@ -241,7 +241,9 @@ def load_merged_settings() -> Dict[str, Any]:
                     env_key = candidate_key
                     env_mtime = mtime
 
-    settings_key = str(merged.get("openrouter_api_key") or "").strip()
+    settings_key = str(merged.get("openrouter_api_key") or merged.get("vision_api_key") or "").strip()
+    if settings_key and not merged.get("openrouter_api_key"):
+        merged["openrouter_api_key"] = settings_key
     if env_key and (not settings_key or newest_settings_mtime <= env_mtime):
         merged["openrouter_api_key"] = env_key
 

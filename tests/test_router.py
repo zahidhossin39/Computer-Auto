@@ -384,3 +384,111 @@ def test_chrome_local_state_parsing_and_profile_lookup(tmp_path):
     assert apps.find_chrome_profile("9th", local_state_path=str(state_file)) is None
 
 
+def test_open_chrome_window_does_not_hijack_browser_tab_history_or_compound_commands(router, monkeypatch):
+    """Regression test: when Chrome is open, 'close the browser tab', 'open browser history',
+    'open new browser tab', 'open firefox browser', and 'open browser and type hello' must NOT
+    be hijacked by apps.find_window('browser') as close_window or focus_window."""
+    from src import apps
+
+    monkeypatch.setattr(
+        apps,
+        "open_windows",
+        lambda: [(983670, "New Tab - Google Chrome", "chrome.exe")],
+    )
+    monkeypatch.setattr(apps, "find", lambda name: None)
+
+    r_close_tab = router.route("close the browser tab")
+    assert r_close_tab.is_vision is False
+    assert r_close_tab.intent.name == "close_tab"
+    assert r_close_tab.intent.action.type == "hotkey"
+
+    r_history = router.route("open browser history")
+    assert r_history.is_vision is False
+    assert r_history.intent.name == "show_history"
+
+    r_new_tab = router.route("open new browser tab")
+    assert r_new_tab.is_vision is False
+    assert r_new_tab.intent.name == "new_tab"
+
+    r_firefox = router.route("open firefox browser")
+    assert r_firefox.intent is None or r_firefox.intent.name != "focus_window"
+
+    r_compound = router.route("open browser and type hello")
+    assert r_compound.is_vision is True
+
+    # Generic 'focus browser' and 'open the browser that is already opened' focus Chrome
+    r_focus1 = router.route("focus browser")
+    assert r_focus1.is_vision is False
+    assert r_focus1.intent.name == "focus_window"
+    assert r_focus1.intent.action.target == "983670"
+
+    r_focus2 = router.route("open the browser that is already opened")
+    assert r_focus2.is_vision is False
+    assert r_focus2.intent.name == "focus_window"
+    assert r_focus2.intent.action.target == "983670"
+
+
+def test_chrome_profile_slot_extended_phrasings_and_compound_rejection(router, monkeypatch):
+    """Verify 'check 3rd gmail', 'in google chrome open third number profile', 'open my gmail',
+    and rejection of compound commands like 'open notepad and type my 1st email'."""
+    from src import apps
+
+    sample_profiles = [
+        {"index": 1, "dir": "Default", "name": "Zaid hossain", "email": "zahidhossin39@gmail.com"},
+        {"index": 2, "dir": "Profile 2", "name": "Zaid", "email": "zahidhossin509@gmail.com"},
+        {"index": 3, "dir": "Profile 5", "name": "Zaid", "email": "zahidhosson28@gmail.com"},
+        {"index": 4, "dir": "Profile 6", "name": "zahid", "email": "zahidhossain3009@gmail.com"},
+        {"index": 5, "dir": "Profile 7", "name": "Zaid", "email": "hello.zaidhossain@gmail.com"},
+    ]
+    monkeypatch.setattr(apps, "chrome_profiles", lambda: sample_profiles)
+
+    r_check = router.route("check 3rd gmail")
+    assert r_check.is_vision is False
+    assert r_check.intent.name == "open_chrome_gmail"
+    assert r_check.intent.action.args == ["--profile-directory=Profile 5", "https://mail.google.com"]
+
+    r_check_5 = router.route("check my 5th email")
+    assert r_check_5.is_vision is False
+    assert r_check_5.intent.name == "open_chrome_gmail"
+    assert r_check_5.intent.action.args == ["--profile-directory=Profile 7", "https://mail.google.com"]
+
+    r_in_google = router.route("in google chrome open third number profile")
+    assert r_in_google.is_vision is False
+    assert r_in_google.intent.name == "open_chrome_profile"
+    assert r_in_google.intent.action.args == ["--profile-directory=Profile 5"]
+
+    r_my_gmail = router.route("open my gmail")
+    assert r_my_gmail.is_vision is False
+    assert r_my_gmail.intent.action.type == "open_url"
+    assert r_my_gmail.intent.action.target == "https://mail.google.com"
+
+    # Compound command must NOT be hijacked by _match_chrome_profile_slot
+    r_compound = router.route("open notepad and type my 1st email")
+    assert r_compound.is_vision is True
+
+
+def test_jev_options_deduplicated_no_probability_split(router, monkeypatch):
+    """Verify _jev_route does not add duplicate open_app options for apps already in static intents."""
+    from unittest.mock import patch
+    from src import apps
+
+    monkeypatch.setattr(apps, "chrome_profiles", lambda: [])
+    router.use_jev = True
+    captured_options = {}
+
+    def fake_choose(ctx, question, options):
+        captured_options.update(options)
+        return ("launch_notepad", 0.99)
+
+    with patch("src.jev.choose", side_effect=fake_choose):
+        res = router.route("fire up the text editor")
+        assert res.is_vision is False
+        assert res.intent.name == "launch_notepad"
+
+    assert "launch_notepad" in captured_options
+    assert "open_app:notepad" not in captured_options
+    assert "open_app:calculator" not in captured_options
+    assert "open_app:chrome" not in captured_options
+
+
+

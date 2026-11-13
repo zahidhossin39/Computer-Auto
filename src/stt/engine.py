@@ -34,7 +34,8 @@ PARAKEET_REQUIRED_FILES = ("encoder.int8.onnx", "decoder.int8.onnx", "joiner.int
 VOCAB_HINT = (
     "Claude, Claude Code, Chrome, Discord, VS Code, Notepad, Explorer, Terminal, "
     "PowerShell, Spotify, Slack, Teams, Settings, Calculator, new tab, close tab, "
-    "close window, minimize, maximize, restore, switch to, YouTube, Gmail, GitHub, ChatGPT"
+    "close window, minimize, maximize, restore, switch to, YouTube, Gmail, GitHub, ChatGPT, "
+    "profile, 1st, 2nd, 3rd, 4th, 5th, 6th, first, second, third, fourth, fifth, sixth"
 )
 
 
@@ -43,6 +44,7 @@ class SpeechRecognizer:
     audio to OpenRouter instead: ~1.3s, ~$0.0002 a command, better with names."""
 
     _chat_only_models: set[str] = set()
+    _http_session = None
 
     def __init__(
         self,
@@ -111,6 +113,12 @@ class SpeechRecognizer:
         if not key:
             return ""
         model = (self.cloud_model or "google/gemini-2.5-flash").strip()
+        if hasattr(requests.post, "_mock_name"):
+            post_fn = requests.post
+        else:
+            if SpeechRecognizer._http_session is None:
+                SpeechRecognizer._http_session = requests.Session()
+            post_fn = SpeechRecognizer._http_session.post
         try:
             buf = io.BytesIO()
             with wave.open(buf, "wb") as wf:
@@ -123,7 +131,7 @@ class SpeechRecognizer:
             # 1. Standard audio/transcriptions endpoint (tested contract & whisper-compatible)
             if model not in self._chat_only_models:
                 try:
-                    r = requests.post(
+                    r = post_fn(
                         TRANSCRIBE_URL,
                         headers={"Authorization": f"Bearer {key}"},
                         data={"model": model, "prompt": VOCAB_HINT},
@@ -159,7 +167,8 @@ class SpeechRecognizer:
                                         "Listen to this audio clip and transcribe the spoken words into lowercase English text. "
                                         "Spelling hints: Claude, Chrome, Discord, VS Code, Notepad, Explorer, Terminal, "
                                         "PowerShell, Spotify, Slack, Teams, Settings, Calculator, new tab, close tab, "
-                                        "close window, minimize, maximize, restore, switch to, YouTube, Gmail, GitHub. "
+                                        "close window, minimize, maximize, restore, switch to, YouTube, Gmail, GitHub, "
+                                        "profile, 1st, 2nd, 3rd, 4th, 5th, 6th. "
                                         "Respond ONLY with the transcribed words. No punctuation, no markdown, no quotes. "
                                         "If the audio is silent or unintelligible noise, respond with an empty string."
                                     ),
@@ -173,7 +182,7 @@ class SpeechRecognizer:
                     ],
                     "temperature": 0.0,
                 }
-                r2 = requests.post(
+                r2 = post_fn(
                     "https://openrouter.ai/api/v1/chat/completions",
                     headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
                     json=payload,

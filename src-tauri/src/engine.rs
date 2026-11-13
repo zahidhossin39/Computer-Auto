@@ -223,6 +223,7 @@ fn write_settings_file(path: &Path, settings: &AppSettings) -> Result<(), String
     base_obj.insert("vision_api_base".into(), json!(settings.vision_api_base));
     if !settings.vision_api_key.trim().is_empty() {
         base_obj.insert("vision_api_key".into(), json!(settings.vision_api_key));
+        base_obj.insert("openrouter_api_key".into(), json!(settings.vision_api_key));
     }
     base_obj.insert("stt_cloud_model".into(), json!(settings.stt_cloud_model));
     base_obj.insert("theme".into(), json!(settings.theme));
@@ -582,7 +583,10 @@ fn find_chrome_exe() -> String {
     "chrome".to_string()
 }
 
-pub fn try_chrome_profile_command(lower: &str) -> Option<Result<String, String>> {
+pub fn resolve_chrome_profile_from_json(lower: &str, data: &Value) -> Option<(String, bool)> {
+    if lower.contains(" and ") || lower.contains(" then ") {
+        return None;
+    }
     let is_gmail = ["gmail", "g mail", "mail", "email", "inbox"]
         .iter()
         .any(|k| lower.contains(k));
@@ -591,14 +595,6 @@ pub fn try_chrome_profile_command(lower: &str) -> Option<Result<String, String>>
         return None;
     }
 
-    let local_app_data = std::env::var("LOCALAPPDATA").ok()?;
-    let state_path = PathBuf::from(local_app_data)
-        .join("Google")
-        .join("Chrome")
-        .join("User Data")
-        .join("Local State");
-    let raw = fs::read_to_string(state_path).ok()?;
-    let data: Value = serde_json::from_str(&raw).ok()?;
     let profile_obj = data.get("profile")?;
     let info_cache = profile_obj.get("info_cache")?.as_object()?;
 
@@ -606,17 +602,31 @@ pub fn try_chrome_profile_command(lower: &str) -> Option<Result<String, String>>
     if let Some(arr) = profile_obj.get("profiles_order").and_then(|v| v.as_array()) {
         for item in arr {
             if let Some(d) = item.as_str() {
-                if info_cache.contains_key(d) {
+                if info_cache.contains_key(d) && !ordered_dirs.iter().any(|x| x == d) {
                     ordered_dirs.push(d.to_string());
                 }
             }
         }
     }
-    for k in info_cache.keys() {
-        if !ordered_dirs.contains(k) {
-            ordered_dirs.push(k.clone());
+    let mut remaining: Vec<String> = info_cache
+        .keys()
+        .filter(|k| !ordered_dirs.contains(k))
+        .cloned()
+        .collect();
+    remaining.sort_by_key(|k| {
+        if k == "Default" {
+            (0usize, 0usize, k.clone())
+        } else if let Some(num_str) = k.strip_prefix("Profile ") {
+            if let Ok(n) = num_str.trim().parse::<usize>() {
+                return (1usize, n, k.clone());
+            }
+            (2usize, 0usize, k.clone())
+        } else {
+            (2usize, 0usize, k.clone())
         }
-    }
+    });
+    ordered_dirs.extend(remaining);
+
     if ordered_dirs.is_empty() {
         return None;
     }
@@ -630,6 +640,8 @@ pub fn try_chrome_profile_command(lower: &str) -> Option<Result<String, String>>
         (&["6th", "sixth", "number 6", "6 number"], 6),
         (&["7th", "seventh", "number 7", "7 number"], 7),
         (&["8th", "eighth", "number 8", "8 number"], 8),
+        (&["9th", "ninth", "number 9", "9 number"], 9),
+        (&["10th", "tenth", "number 10", "10 number"], 10),
     ];
 
     let mut matched_idx: Option<usize> = None;
@@ -641,7 +653,8 @@ pub fn try_chrome_profile_command(lower: &str) -> Option<Result<String, String>>
     }
     if matched_idx.is_none() {
         for word in lower.split_whitespace() {
-            if let Ok(n) = word.parse::<usize>() {
+            let trimmed = word.trim_matches(|c: char| !c.is_alphanumeric());
+            if let Ok(n) = trimmed.parse::<usize>() {
                 if (1..=10).contains(&n) {
                     matched_idx = Some(n);
                     break;
@@ -650,11 +663,24 @@ pub fn try_chrome_profile_command(lower: &str) -> Option<Result<String, String>>
         }
     }
 
+    let stop_words = [
+        "open", "launch", "start", "go", "to", "switch", "use", "check", "in", "on", "from",
+        "with", "for", "the", "my", "this", "chrome", "google", "browser", "gmail", "mail",
+        "email", "inbox", "profile", "account", "number", "please",
+    ];
+    let query_tokens: Vec<&str> = lower
+        .split(|c: char| !c.is_alphanumeric() && c != '@' && c != '.' && c != '_' && c != '-')
+        .filter(|w| !w.is_empty() && !stop_words.contains(w))
+        .collect();
+
     let target_dir = if let Some(idx) = matched_idx {
         ordered_dirs.get(idx - 1)?.clone()
-    } else if lower.contains("last") {
+    } else if query_tokens.contains(&"last") {
         ordered_dirs.last()?.clone()
     } else {
+        if query_tokens.is_empty() {
+            return None;
+        }
         let mut found: Option<String> = None;
         for dir in &ordered_dirs {
             if let Some(meta) = info_cache.get(dir) {
@@ -669,14 +695,14 @@ pub fn try_chrome_profile_command(lower: &str) -> Option<Result<String, String>>
                     .unwrap_or("")
                     .to_lowercase();
                 let handle = email.split('@').next().unwrap_or("");
-                if (!handle.is_empty() && lower.contains(handle))
-                    || (!name.is_empty() && name != "zaid" && lower.contains(&name))
+                if (!handle.is_empty() && query_tokens.iter().any(|t| *t == handle || handle.contains(t) && t.len() >= 4))
+                    || (!name.is_empty() && name != "zaid" && query_tokens.iter().any(|t| *t == name))
                 {
                     found = Some(dir.clone());
                     break;
                 }
                 for part in handle.split(['.', '_', '-']) {
-                    if part.len() >= 3 && part != "zaid" && lower.contains(part) {
+                    if part.len() >= 3 && part != "zaid" && query_tokens.contains(&part) {
                         found = Some(dir.clone());
                         break;
                     }
@@ -688,6 +714,20 @@ pub fn try_chrome_profile_command(lower: &str) -> Option<Result<String, String>>
         }
         found?
     };
+
+    Some((target_dir, is_gmail))
+}
+
+pub fn try_chrome_profile_command(lower: &str) -> Option<Result<String, String>> {
+    let local_app_data = std::env::var("LOCALAPPDATA").ok()?;
+    let state_path = PathBuf::from(local_app_data)
+        .join("Google")
+        .join("Chrome")
+        .join("User Data")
+        .join("Local State");
+    let raw = fs::read_to_string(state_path).ok()?;
+    let data: Value = serde_json::from_str(&raw).ok()?;
+    let (target_dir, is_gmail) = resolve_chrome_profile_from_json(lower, &data)?;
 
     let chrome_exe = find_chrome_exe();
     let mut cmd = no_window_cmd(&chrome_exe);
@@ -861,11 +901,33 @@ pub fn try_native_command(raw_text: &str) -> Option<Result<String, String>> {
     for prefix in ["open ", "launch ", "start ", "go to "] {
         if let Some(target_lower) = lower.strip_prefix(prefix) {
             let target = text[text.len() - target_lower.len()..].trim();
+            let clean_lower = target_lower
+                .trim()
+                .trim_start_matches("my ")
+                .trim_start_matches("this ")
+                .trim_start_matches("the ")
+                .trim();
             if target.starts_with("http://") || target.starts_with("https://") {
                 return Some(spawn_shell_open(target).map(|_| format!("Opened {target}")));
             }
-            if let Some(alias) = map_app_alias(target) {
-                return Some(spawn_shell_open(alias).map(|_| format!("Opened {target}")));
+            let site_url = match clean_lower {
+                "gmail" | "g mail" | "email" | "inbox" => Some("https://mail.google.com"),
+                "youtube" => Some("https://www.youtube.com"),
+                "github" => Some("https://github.com"),
+                "chatgpt" => Some("https://chatgpt.com"),
+                "reddit" => Some("https://www.reddit.com"),
+                _ => None,
+            };
+            if let Some(url) = site_url {
+                return Some(spawn_shell_open(url).map(|_| format!("Opened {clean_lower}")));
+            }
+            if let Some(alias) = map_app_alias(clean_lower) {
+                let resolved = if alias == "chrome" {
+                    find_chrome_exe()
+                } else {
+                    alias.to_string()
+                };
+                return Some(spawn_shell_open(&resolved).map(|_| format!("Opened {target}")));
             }
             if target.contains('.') && !target.contains(' ') {
                 let url = format!("https://{target}");
@@ -1143,5 +1205,41 @@ OPENROUTER_API_KEY="sk-or-v1-test123456"
         apply_settings_patch(&patch, &mut s);
         assert_eq!(s.vision_api_base, "https://example.com/v1");
         assert_eq!(s.vision_api_key, "sk-or-v1-newkey123456");
+    }
+
+    #[test]
+    fn test_resolve_chrome_profile_from_json() {
+        let state = json!({
+            "profile": {
+                "profiles_order": ["Default", "Profile 2", "Profile 5", "Profile 8"],
+                "info_cache": {
+                    "Default": {"name": "Zaid hossain", "user_name": "zahidhossin39@gmail.com"},
+                    "Profile 2": {"name": "Zaid", "user_name": "zahidhossin509@gmail.com"},
+                    "Profile 5": {"name": "Zaid", "user_name": "zahidhosson28@gmail.com"},
+                    "Profile 8": {"name": "Zaid.W", "user_name": "work.zaid.business@gmail.com"}
+                }
+            }
+        });
+        assert_eq!(
+            resolve_chrome_profile_from_json("open 3rd gmail", &state),
+            Some(("Profile 5".into(), true))
+        );
+        assert_eq!(
+            resolve_chrome_profile_from_json("open third number profile", &state),
+            Some(("Profile 5".into(), false))
+        );
+        assert_eq!(
+            resolve_chrome_profile_from_json("open work gmail", &state),
+            Some(("Profile 8".into(), true))
+        );
+        assert_eq!(
+            resolve_chrome_profile_from_json("open last chrome profile", &state),
+            Some(("Profile 8".into(), false))
+        );
+        // Plain "open gmail" without a specific profile should return None so site launcher handles it
+        assert_eq!(resolve_chrome_profile_from_json("open gmail", &state), None);
+        assert_eq!(resolve_chrome_profile_from_json("open my gmail", &state), None);
+        // Out-of-bounds ordinal returns None
+        assert_eq!(resolve_chrome_profile_from_json("open 9th gmail", &state), None);
     }
 }

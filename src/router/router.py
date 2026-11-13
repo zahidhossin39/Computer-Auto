@@ -45,6 +45,8 @@ class CommandRouter:
         self._intents_by_name = {i.name: i for i in intents}
         # Jev picks one of these; "none" sends the command on to the vision agent
         self._jev_options = {i.name: "; ".join(i.triggers[:4]) for i in intents}
+        if "launch_notepad" in self._jev_options:
+            self._jev_options["launch_notepad"] += "; text editor"
         self._jev_options["none"] = "Anything else: clicking, typing, choosing items on screen, multi-step tasks"
 
     def _normalize(self, text: str) -> str:
@@ -138,24 +140,32 @@ class CommandRouter:
 
     def _jev_route(self, raw: str, clean: str = "") -> Optional[Intent]:
         """Use TypeSafe Jev decision model to map natural speech onto deterministic commands."""
+        # Do not collapse a multi-step compound command ("open notepad and type hi") into a
+        # single Jev choice; let main._split_compound split it into individual steps first.
+        if re.search(r"\b(?:and then|then|and)\b", clean or raw.lower()):
+            return None
+
         options = dict(self._jev_options)
+        ord_words = {
+            1: "1st / first",
+            2: "2nd / second",
+            3: "3rd / third",
+            4: "4th / fourth",
+            5: "5th / fifth",
+            6: "6th / sixth",
+            7: "7th / seventh",
+            8: "8th / eighth",
+            9: "9th / ninth",
+            10: "10th / tenth",
+        }
         try:
             for p in apps.chrome_profiles()[:12]:
                 idx = p["index"]
                 pdir = p["dir"]
-                label = f"#{idx} {p['name']} ({p['email'] or pdir})"
-                options[f"chrome_gmail:{pdir}"] = f"Open Gmail / email #{idx} ({label}) in Chrome"
-                options[f"chrome_profile:{pdir}"] = f"Open / switch to Chrome profile #{idx} ({label})"
-        except Exception:
-            pass
-
-        try:
-            for hwnd, title, exe in apps.open_windows()[:12]:
-                short_title = title[:40].replace(":", " ")
-                options[f"focus_win:{hwnd}:{short_title}"] = f"Switch to / focus / open existing window '{short_title}' ({exe})"
-                options[f"min_win:{hwnd}:{short_title}"] = f"Minimize window '{short_title}' ({exe})"
-                options[f"max_win:{hwnd}:{short_title}"] = f"Maximize window '{short_title}' ({exe})"
-                options[f"close_win:{hwnd}:{short_title}"] = f"Close window '{short_title}' ({exe})"
+                ord_str = ord_words.get(idx, f"#{idx}")
+                label = f"#{idx} {ord_str} {p['name']} ({p['email'] or pdir})"
+                options[f"chrome_gmail:{pdir}"] = f"Open Gmail / email / inbox {label} in Chrome"
+                options[f"chrome_profile:{pdir}"] = f"Open / switch to Chrome browser profile / persona / account {label}"
         except Exception:
             pass
 
@@ -163,9 +173,12 @@ class CommandRouter:
             if len(options) < 245:
                 options[f"open_site:{site_key}"] = f"Open {site_key} website ({site_url})"
 
+        # Only add apps not already covered by static intents in intents.yaml so duplicate
+        # options do not split Jev's probability distribution across two identical choices.
+        static_app_keys = {"notepad", "terminal", "calculator", "settings", "chrome"}
         for app_key, (disp, _app_id) in apps.COMMON_APPS.items():
-            if len(options) < 252:
-                options[f"open_app:{app_key}"] = f"Open / launch {disp} application"
+            if app_key not in static_app_keys and len(options) < 252:
+                options[f"open_app:{app_key}"] = f"Open / launch / switch to {disp} application"
 
         picked = jev.choose(
             {"spoken_command": raw},
@@ -224,14 +237,14 @@ class CommandRouter:
     def _match_chrome_profile_slot(self, clean: str) -> Optional[Intent]:
         """Match commands targeting a specific Chrome profile or numbered/named Gmail account."""
         m = re.match(
-            r"(?:in\s+(?:chrome|browser)\s+)?(?:open|launch|start|run|switch to|switch back to|go to|focus|show|bring up|choose|select|pick|click|use)\s+(.+)$",
+            r"(?:in\s+(?:google\s+)?(?:chrome|browser)\s+)?(?:open|launch|start|run|switch to|switch back to|go to|focus|show|bring up|choose|select|pick|use|check)\s+(.+)$",
             clean,
         )
         if not m:
             return None
         rest = m.group(1).strip()
         words = rest.split()
-        if len(words) > 8 or (words and words[-1] in ("and", "or", "from")):
+        if len(words) > 8 or any(w in ("and", "or", "then") for w in words) or (words and words[-1] == "from"):
             return None
 
         gmail_words = {"gmail", "gmails", "email", "emails", "inbox"}
@@ -342,13 +355,15 @@ class CommandRouter:
         m = re.match(r"(?:switch to|switch back to|go to|go back to|focus|show me|show|bring up|bring back|open(?: the)?)\s+(.+?)(?:\s+(?:that is|which is)?\s*(?:already\s+)?open(?:ed)?(?:\s+on(?:\s+the)?(?:\s+screen)?)?)?$", clean)
         if m:
             target = m.group(1).strip()
-            win = apps.find_window(target)
-            if win:
-                return _make("focus_window", IntentAction("focus_window", target=str(win[0]), command=win[1]))
-            if target in SITES:  # "go to youtube": no such window open, so open the site
-                return _make("open_url", IntentAction("open_url", target=SITES[target]))
+            if not re.search(r"\b(?:and|then)\b", target):
+                win = apps.find_window(target)
+                if win:
+                    return _make("focus_window", IntentAction("focus_window", target=str(win[0]), command=win[1]))
+                site_target = re.sub(r"^(?:my|this|the)\s+", "", target)
+                if site_target in SITES:  # "go to youtube", "open my gmail": no such window open, so open the site
+                    return _make("open_url", IntentAction("open_url", target=SITES[site_target]))
         m = re.match(r"(?:minimize|minimise|minimized|minimas|minima's)\s+(.+)$", clean)
-        if m:
+        if m and not re.search(r"\b(?:and|then)\b", m.group(1)):
             target = m.group(1).strip()
             win = apps.find_window(target)
             if win:
@@ -364,7 +379,7 @@ class CommandRouter:
                 return _make("not_open", IntentAction("say", target=f"{clean_target} is not open"))
 
         m = re.match(r"(?:maximize|maximise|maximized)\s+(.+)$", clean)
-        if m:
+        if m and not re.search(r"\b(?:and|then)\b", m.group(1)):
             target = m.group(1).strip()
             win = apps.find_window(target)
             if win:
@@ -380,7 +395,7 @@ class CommandRouter:
                 return _make("not_open", IntentAction("say", target=f"{clean_target} is not open"))
 
         m = re.match(r"(?:restore|unmaximize|unmaximise)\s+(.+)$", clean)
-        if m:
+        if m and not re.search(r"\b(?:and|then)\b", m.group(1)):
             target = m.group(1).strip()
             win = apps.find_window(target)
             if win:
@@ -395,7 +410,12 @@ class CommandRouter:
             if known:
                 return _make("not_open", IntentAction("say", target=f"{clean_target} is not open"))
         m = re.match(r"(?:close|quit|exit)\s+(.+)$", clean)
-        if m and m.group(1) not in ("tab", "this tab", "window", "this", "it"):
+        if (
+            m
+            and not re.search(r"\b(?:and|then)\b", m.group(1))
+            and m.group(1) not in ("tab", "this tab", "current tab", "browser tab", "window", "this", "it")
+            and "tab" not in m.group(1).split()
+        ):
             target = m.group(1)
             win = apps.find_window(target)
             if win:
@@ -412,7 +432,7 @@ class CommandRouter:
                 return _make("not_open", IntentAction("say", target=f"{target} is not open"))
             return None
         m = re.match(r"(?:open|launch|start|run)\s+(.+?)(?:\s+app)?$", clean)
-        if m:
+        if m and not re.search(r"\b(?:and|then)\b", m.group(1)):
             try:
                 found = apps.find(m.group(1), allow_jev=not self.use_jev)
             except TypeError:
@@ -454,6 +474,7 @@ def _parse_keys(spoken: str) -> Optional[List[str]]:
 FILE_EXTENSIONS = {"exe", "txt", "docx", "doc", "pdf", "py", "png", "jpg", "jpeg", "xlsx", "csv",
                    "pptx", "zip", "mp3", "mp4", "lnk", "bat", "md", "json"}
 SITES = {"youtube": "https://www.youtube.com", "gmail": "https://mail.google.com",
+         "email": "https://mail.google.com", "inbox": "https://mail.google.com",
          "google": "https://www.google.com", "github": "https://github.com",
          "reddit": "https://www.reddit.com", "amazon": "https://www.amazon.com",
          "netflix": "https://www.netflix.com", "facebook": "https://www.facebook.com",

@@ -140,7 +140,7 @@ def test_continuous_mode_rearms_and_panic_ends_it():
 
     daemon.on_listening_toggle(False)  # VAD stop -> worker runs -> should re-arm
     for _ in range(250):  # up to 5s on a loaded machine
-        if daemon.recorder.is_recording:
+        if daemon.recorder.is_recording and daemon._listening_active:
             break
         time.sleep(0.02)
     assert daemon.recorder.is_recording and daemon._listening_active
