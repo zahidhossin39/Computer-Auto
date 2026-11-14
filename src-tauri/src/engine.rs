@@ -11,13 +11,15 @@ use tauri::{AppHandle, Emitter};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-pub const APP_VERSION: &str = "2.5.0";
+pub const APP_VERSION: &str = "2.5.1";
 pub const CREATE_NO_WINDOW: u32 = 0x08000000;
 const DEPRECATED_MODEL: &str = "google/gemini-3.1-flash-lite";
 const DEFAULT_MODEL: &str = "google/gemini-2.5-flash";
 const DEFAULT_API_BASE: &str = "https://openrouter.ai/api/v1";
 const GITHUB_LATEST_RELEASE_URL: &str =
     "https://api.github.com/repos/zahidhossin39/Computer-Auto/releases/latest";
+const GITHUB_LATEST_HTML_URL: &str =
+    "https://github.com/zahidhossin39/Computer-Auto/releases/latest";
 
 /// Create a `std::process::Command` that NEVER opens a console window on Windows.
 pub fn no_window_cmd(program: &str) -> Command {
@@ -1398,20 +1400,66 @@ pub fn select_best_windows_asset(assets: &[Value]) -> Option<(String, String)> {
     setup_match.or(exe_match)
 }
 
+fn check_update_via_html_redirect() -> Result<Value, String> {
+    let resp = ureq::get(GITHUB_LATEST_HTML_URL)
+        .set("User-Agent", &format!("Computer-Auto/{APP_VERSION}"))
+        .call()
+        .map_err(|e| format!("Update check failed: {e}"))?;
+
+    let final_url = resp.get_url().to_string();
+    let tag = if let Some(idx) = final_url.rfind("/tag/") {
+        final_url[idx + 5..]
+            .split(['?', '#', '/'])
+            .next()
+            .unwrap_or(APP_VERSION)
+            .to_string()
+    } else {
+        APP_VERSION.to_string()
+    };
+
+    let latest_version = tag.trim().trim_start_matches(['v', 'V']).to_string();
+    let update_available = is_newer_version(&latest_version, APP_VERSION);
+    let asset_name = "Computer-Auto-Setup.exe".to_string();
+    let download_url = format!(
+        "https://github.com/zahidhossin39/Computer-Auto/releases/download/v{latest_version}/{asset_name}"
+    );
+
+    Ok(json!({
+        "update_available": update_available,
+        "current_version": APP_VERSION,
+        "latest_version": latest_version,
+        "asset_name": asset_name,
+        "download_url": download_url,
+        "release_notes": "",
+    }))
+}
+
 pub fn check_update_impl() -> Result<Value, String> {
-    let resp: Value = ureq::get(GITHUB_LATEST_RELEASE_URL)
+    let api_res = ureq::get(GITHUB_LATEST_RELEASE_URL)
         .set("User-Agent", &format!("Computer-Auto/{APP_VERSION}"))
         .set("Accept", "application/vnd.github+json")
-        .call()
-        .map_err(|e| format!("Update check failed: {e}"))?
-        .into_json()
-        .map_err(|e| format!("Invalid GitHub JSON: {e}"))?;
+        .call();
+
+    let resp: Value = match api_res {
+        Ok(r) => match r.into_json() {
+            Ok(v) => v,
+            Err(_) => return check_update_via_html_redirect(),
+        },
+        Err(_) => return check_update_via_html_redirect(),
+    };
 
     let tag = resp["tag_name"].as_str().unwrap_or(APP_VERSION);
     let latest_version = tag.trim().trim_start_matches(['v', 'V']).to_string();
     let update_available = is_newer_version(&latest_version, APP_VERSION);
     let assets = resp["assets"].as_array().map(|a| a.as_slice()).unwrap_or(&[]);
-    let best = select_best_windows_asset(assets);
+    let best = select_best_windows_asset(assets).or_else(|| {
+        Some((
+            "Computer-Auto-Setup.exe".to_string(),
+            format!(
+                "https://github.com/zahidhossin39/Computer-Auto/releases/download/v{latest_version}/Computer-Auto-Setup.exe"
+            ),
+        ))
+    });
 
     Ok(json!({
         "update_available": update_available,
@@ -1428,11 +1476,14 @@ pub fn install_update_impl(app: &AppHandle) -> Result<String, String> {
     let url = info["download_url"]
         .as_str()
         .ok_or_else(|| "No Windows .exe asset found in latest release".to_string())?;
-    let name = info["asset_name"]
+    let latest_ver = info["latest_version"].as_str().unwrap_or("latest");
+    let raw_name = info["asset_name"]
         .as_str()
-        .unwrap_or("Computer-Auto-Update.exe");
+        .unwrap_or("Computer-Auto-Setup.exe");
+    let stem = raw_name.trim_end_matches(".exe");
+    let unique_name = format!("{stem}-{latest_ver}.exe");
 
-    let temp_path = std::env::temp_dir().join(name);
+    let temp_path = std::env::temp_dir().join(&unique_name);
     let resp = ureq::get(url)
         .set("User-Agent", &format!("Computer-Auto/{APP_VERSION}"))
         .call()
@@ -1452,12 +1503,24 @@ pub fn install_update_impl(app: &AppHandle) -> Result<String, String> {
     }
     drop(file);
 
-    no_window_cmd(&temp_path.to_string_lossy())
+    let installed_exe = dirs::data_local_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("Computer-Auto")
+        .join("Computer-Auto.exe");
+    let installer_str = temp_path.to_string_lossy().replace('\'', "''");
+    let relaunch_str = installed_exe.to_string_lossy().replace('\'', "''");
+
+    let ps_script = format!(
+        "Start-Sleep -Milliseconds 1200; Start-Process -FilePath '{installer_str}' -ArgumentList '/S' -Wait; if (Test-Path '{relaunch_str}') {{ Start-Process -FilePath '{relaunch_str}' }}"
+    );
+
+    no_window_cmd("powershell")
+        .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &ps_script])
         .spawn()
         .map_err(|e| format!("Failed to launch updater: {e}"))?;
 
     app.exit(0);
-    Ok(format!("Launched installer: {name}"))
+    Ok(format!("Launched installer: {unique_name}"))
 }
 
 #[cfg(test)]

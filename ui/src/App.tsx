@@ -90,7 +90,7 @@ export function App() {
     use_jev: true,
     has_api_key: false,
     has_local_model: false,
-    app_version: "2.5.0",
+    app_version: "2.5.1",
   });
   const [downloadProgress, setDownloadProgress] = useState<DownloadProgress>({
     active: false,
@@ -255,16 +255,36 @@ export function App() {
       const res = await checkUpdate();
       setUpdateStatus(res);
     } catch (err) {
+      const msg =
+        typeof err === "string"
+          ? err
+          : err instanceof Error
+          ? err.message
+          : "Failed to check updates";
       setUpdateStatus({
         status: "error",
-        error: err instanceof Error ? err.message : "Failed to check updates",
+        error: msg,
       });
     }
   };
 
   const handleInstallUpdate = async () => {
-    setUpdateStatus((prev) => ({ ...prev, status: "downloading" }));
-    await installUpdate();
+    setUpdateStatus((prev) => ({ ...prev, status: "downloading", error: undefined }));
+    try {
+      await installUpdate();
+    } catch (err) {
+      const msg =
+        typeof err === "string"
+          ? err
+          : err instanceof Error
+          ? err.message
+          : "Failed to install update";
+      setUpdateStatus((prev) => ({
+        ...prev,
+        status: "error",
+        error: msg,
+      }));
+    }
   };
 
   const handleMiniSubmit = async (e: React.FormEvent) => {
@@ -297,7 +317,7 @@ export function App() {
         onToggleTheme={() => void handleToggleTheme()}
         onMinimize={() => void minimizeWin()}
         onClose={() => void closeWin()}
-        version={settings.app_version || "2.5.0"}
+        version={settings.app_version || "2.5.1"}
       />
 
       {/* Main Content */}

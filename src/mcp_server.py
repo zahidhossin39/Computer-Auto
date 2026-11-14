@@ -26,7 +26,7 @@ from src.config import load_intents
 from src.router.router import CommandRouter
 
 SERVER_NAME = "computer-auto"
-SERVER_VERSION = "2.5.0"
+SERVER_VERSION = "2.5.1"
 DEFAULT_PROTOCOL_VERSION = "2024-11-05"
 
 

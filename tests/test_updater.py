@@ -17,7 +17,7 @@ from src.updater import (
 
 
 def test_app_version_is_v2():
-    assert APP_VERSION == "2.5.0"
+    assert APP_VERSION == "2.5.1"
 
 
 def test_parse_version():

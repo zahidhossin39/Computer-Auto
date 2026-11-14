@@ -44,7 +44,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
   onToggleTheme,
   onMinimize,
   onClose,
-  version = "2.5",
+  version = "2.5.1",
 }) => {
   const statusLabel = aiReady
     ? "AI Cloud Ready"
@@ -84,7 +84,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
 
           {!compact && (
             <span className="px-2 py-0.5 text-[10px] font-mono font-bold rounded-full bg-[#EADDFF] dark:bg-[#4F378B] text-[#21005D] dark:text-[#EADDFF] tracking-wider ml-1">
-              v{version.replace(/^v/, "").slice(0, 3)}
+              v{version.replace(/^v/, "")}
             </span>
           )}
 

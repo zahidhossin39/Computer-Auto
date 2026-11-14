@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
-APP_VERSION = "2.5.0"
+APP_VERSION = "2.5.1"
 GITHUB_REPO = "zahidhossin39/Computer-Auto"
 
 

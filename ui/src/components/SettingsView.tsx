@@ -1249,19 +1249,28 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               Application Experience & Updates
             </h3>
             <p className="text-xs text-slate-500 dark:text-[#CAC4D0]">
-              Installed version: v{settings.app_version || "2.5.0"}
+              Installed version: v{settings.app_version || "2.5.1"}
             </p>
           </div>
 
           <div className="flex items-center gap-2">
-            {updateStatus.status === "available" ? (
+            {updateStatus.status === "available" || updateStatus.status === "downloading" ? (
               <button
                 type="button"
                 onClick={onInstallUpdate}
-                className="flex items-center gap-2 px-4 py-2 rounded-full text-xs font-bold bg-[#6750A4] dark:bg-[#D0BCFF] text-white dark:text-[#381E72] shadow-sm transition-all"
+                disabled={updateStatus.status === "downloading"}
+                className="flex items-center gap-2 px-4 py-2 rounded-full text-xs font-bold bg-[#6750A4] dark:bg-[#D0BCFF] text-white dark:text-[#381E72] shadow-sm transition-all disabled:opacity-60"
               >
-                <Download className="w-4 h-4" />
-                <span>Install Update ({updateStatus.version})</span>
+                {updateStatus.status === "downloading" ? (
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Download className="w-4 h-4" />
+                )}
+                <span>
+                  {updateStatus.status === "downloading"
+                    ? "Downloading & Installing..."
+                    : `Install Update (${updateStatus.version})`}
+                </span>
               </button>
             ) : (
               <button

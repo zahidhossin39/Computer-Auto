@@ -446,13 +446,17 @@ fn get_mcp_config(app: AppHandle, state: State<'_, AppState>) -> Result<Value, S
 }
 
 #[tauri::command]
-fn check_update() -> Result<Value, String> {
-    check_update_impl()
+async fn check_update() -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(check_update_impl)
+        .await
+        .map_err(|e| format!("Update check task error: {e}"))?
 }
 
 #[tauri::command]
-fn install_update(app: AppHandle) -> Result<String, String> {
-    install_update_impl(&app)
+async fn install_update(app: AppHandle) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || install_update_impl(&app))
+        .await
+        .map_err(|e| format!("Install update task error: {e}"))?
 }
 
 #[tauri::command]

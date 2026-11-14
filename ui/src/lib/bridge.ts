@@ -139,7 +139,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   has_api_key: true,
   masked_key: "sk-or-v1-••••••demo",
   has_local_model: false,
-  app_version: "2.5.0",
+  app_version: "2.5.1",
 };
 
 type Listener = (ev: BridgeEvent) => void;
@@ -440,9 +440,9 @@ export async function checkUpdate(): Promise<UpdateStatus> {
         notes: (res?.notes as string) || undefined,
       };
     }
-    return { status: "up_to_date", version: version || "2.5.0" };
+    return { status: "up_to_date", version: version || "2.5.1" };
   }
-  return { status: "up_to_date", version: "2.5.0" };
+  return { status: "up_to_date", version: "2.5.1" };
 }
 
 export async function installUpdate(): Promise<void> {
