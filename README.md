@@ -1,6 +1,6 @@
-# Computer-Auto v2.2
+# Computer-Auto v2.5
 
-Voice-controlled desktop automation for Windows 10/11 combining a native **Rust + Tauri v2** desktop shell, an expressive **Material Design 3 (M3)** UI with an interactive **Three.js 3D Robotic Mascot ("Nova")**, instant on-device command routing, and multimodal visual computer use.
+Voice-controlled desktop automation for Windows 10/11 combining a native **Rust + Tauri v2** desktop shell, an expressive **Material Design 3 (M3)** UI with an interactive **Three.js 3D Mascot ("Nova")**, instant on-device command routing, and multimodal visual computer use.
 
 ---
 
@@ -8,7 +8,7 @@ Voice-controlled desktop automation for Windows 10/11 combining a native **Rust 
 
 - **Material Design 3 (M3) Interface**: Expressive Material 3 surface hierarchy, color tokens, segmented pill controls, elevated cards, and state chips designed with `@ui-ux-pro-max` and `@impeccable` guidelines (zero emoji-as-icon anti-patterns, full Lucide SVG icons).
 - **Native Rust + Tauri v2 Desktop Shell**: Runs with zero console/terminal window (`IMAGE_SUBSYSTEM_WINDOWS_GUI`), ships as a Windows NSIS Setup Installer (`Computer-Auto-Setup.exe`) and standalone binary (`Computer-Auto.exe`), with native system tray integration and global controls.
-- **3D Robotic Mascot ("Nova") & Command Studio**: Built with **React 18, Tailwind CSS, and Three.js**, featuring:
+- **3D Character Mascot ("Nova") & Command Studio**: Built with **React 18, Tailwind CSS, and Three.js**, featuring:
   - Real-time 3D mascot state animations (Ready, Listening, Thinking, Working, Confirming)
   - Live 32-bar Material 3 audio spectrum visualizer
   - Spotlight command bar for instant typed or voice execution

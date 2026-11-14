@@ -1,6 +1,5 @@
 import React from "react";
 import {
-  Bot,
   Command,
   Maximize2,
   Minimize2,
@@ -45,7 +44,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
   onToggleTheme,
   onMinimize,
   onClose,
-  version = "2.1",
+  version = "2.5",
 }) => {
   const statusLabel = aiReady
     ? "AI Cloud Ready"
@@ -68,7 +67,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
       <div className="flex items-center gap-3 min-w-0">
         <div className="relative group flex items-center justify-center">
           <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-[#6750A4] to-[#D0BCFF] dark:from-[#4F378B] dark:to-[#D0BCFF] flex items-center justify-center shadow-lg shadow-purple-500/20 shrink-0 transition-transform group-hover:scale-105">
-            <Bot className="w-4 h-4 text-white dark:text-[#381E72]" />
+            <Sparkles className="w-4 h-4 text-white dark:text-[#381E72]" />
           </div>
           <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ring-[#141218] animate-pulse" />
         </div>
@@ -83,9 +82,11 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
             </span>
           </div>
 
-          <span className="px-2 py-0.5 text-[10px] font-mono font-bold rounded-full bg-[#EADDFF] dark:bg-[#4F378B] text-[#21005D] dark:text-[#EADDFF] tracking-wider ml-1">
-            v{version.replace(/^v/, "").slice(0, 3)}
-          </span>
+          {!compact && (
+            <span className="px-2 py-0.5 text-[10px] font-mono font-bold rounded-full bg-[#EADDFF] dark:bg-[#4F378B] text-[#21005D] dark:text-[#EADDFF] tracking-wider ml-1">
+              v{version.replace(/^v/, "").slice(0, 3)}
+            </span>
+          )}
 
           {!compact && (
             <div className={`hidden sm:flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium border ${statusColor} ml-1`}>

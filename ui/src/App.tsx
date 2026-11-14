@@ -90,7 +90,7 @@ export function App() {
     use_jev: true,
     has_api_key: false,
     has_local_model: false,
-    app_version: "2.0.0",
+    app_version: "2.5.0",
   });
   const [downloadProgress, setDownloadProgress] = useState<DownloadProgress>({
     active: false,
@@ -297,13 +297,14 @@ export function App() {
         onToggleTheme={() => void handleToggleTheme()}
         onMinimize={() => void minimizeWin()}
         onClose={() => void closeWin()}
-        version={settings.app_version || "2.1.0"}
+        version={settings.app_version || "2.5.0"}
       />
 
       {/* Main Content */}
       {compact ? (
         <main className="flex-1 flex flex-col items-center justify-between p-4 gap-3 relative z-10">
-          <div className="w-40 h-40 relative">
+          <div className="w-40 h-40 relative flex items-center justify-center rounded-2xl">
+            <div className="pointer-events-none absolute inset-0 rounded-2xl bg-[radial-gradient(circle_at_50%_48%,rgba(208,188,255,0.24),transparent_72%)] dark:bg-[radial-gradient(circle_at_50%_48%,rgba(208,188,255,0.14),transparent_72%)]" />
             <RobotMascot3D
               state={mascotState}
               audioLevel={audioLevel}

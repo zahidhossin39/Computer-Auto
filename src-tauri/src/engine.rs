@@ -11,7 +11,7 @@ use tauri::{AppHandle, Emitter};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-pub const APP_VERSION: &str = "2.4.0";
+pub const APP_VERSION: &str = "2.5.0";
 pub const CREATE_NO_WINDOW: u32 = 0x08000000;
 const DEPRECATED_MODEL: &str = "google/gemini-3.1-flash-lite";
 const DEFAULT_MODEL: &str = "google/gemini-2.5-flash";

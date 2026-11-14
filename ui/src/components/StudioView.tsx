@@ -153,8 +153,10 @@ export const StudioView: React.FC<StudioViewProps> = ({
         <div className="absolute top-0 right-0 w-80 h-80 bg-gradient-to-bl from-[#D0BCFF]/10 via-[#4F378B]/5 to-transparent rounded-full blur-3xl pointer-events-none" />
 
         <div className="grid grid-cols-1 md:grid-cols-12 gap-5 items-center relative z-10">
-          {/* Nova 3D Mascot Canvas */}
-          <div className="md:col-span-5 h-56 sm:h-60 relative flex items-center justify-center rounded-2xl bg-gradient-to-b from-white/40 dark:from-white/[0.02] to-transparent">
+          {/* Nova 3D Mascot Canvas Stage */}
+          <div className="md:col-span-5 h-56 sm:h-60 relative flex items-center justify-center rounded-2xl overflow-hidden bg-gradient-to-b from-[#EDE7F6]/70 via-white/40 to-[#F3EDF7]/30 dark:from-[#2B2638]/75 dark:via-[#221E2C]/45 dark:to-transparent border border-[#6750A4]/10 dark:border-[#D0BCFF]/[0.07]">
+            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_46%,rgba(208,188,255,0.28),rgba(103,80,164,0.08)_52%,transparent_76%)] dark:bg-[radial-gradient(circle_at_50%_46%,rgba(208,188,255,0.16),rgba(79,55,139,0.08)_54%,transparent_76%)]" />
+            <div className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 w-36 h-5 rounded-full bg-[#6750A4]/12 dark:bg-[#D0BCFF]/12 blur-md" />
             <RobotMascot3D
               state={state}
               audioLevel={audioLevel}

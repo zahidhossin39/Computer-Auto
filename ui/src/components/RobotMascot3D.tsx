@@ -1,6 +1,12 @@
 import React, { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
+import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import type { MascotState } from "../types";
+import {
+  createMascotRig,
+  setupMascotStudioLighting,
+  type MascotPoseVariant,
+} from "./mascotRig";
 
 interface RobotMascot3DProps {
   state: MascotState;
@@ -10,14 +16,12 @@ interface RobotMascot3DProps {
   onClick?: () => void;
 }
 
-const STATE_COLORS: Record<MascotState, string> = {
-  ready: "#38bdf8",
-  listening: "#34d399",
-  processing: "#a855f7",
-  executing: "#a855f7",
-  guardrail: "#f59e0b",
-  error: "#f43f5e",
-};
+const CLICK_PLAYFUL_CYCLE: MascotPoseVariant[] = [
+  "happy_sip",
+  "executing",
+  "guardrail",
+  "processing",
+];
 
 const SvgFallbackMascot: React.FC<{
   state: MascotState;
@@ -25,68 +29,195 @@ const SvgFallbackMascot: React.FC<{
   compact?: boolean;
   onClick?: () => void;
 }> = ({ state, audioLevel, compact, onClick }) => {
-  const accent = STATE_COLORS[state] || "#38bdf8";
-  const scale = 1 + (state === "listening" ? audioLevel * 0.08 : 0);
+  const scale = 1 + (state === "listening" ? audioLevel * 0.06 : 0);
+  const isSipping = state === "processing";
 
   return (
     <button
       type="button"
       onClick={onClick}
-      aria-label="Nova AI Companion"
+      aria-label="Mochi AI Companion"
       className="relative flex items-center justify-center w-full h-full cursor-pointer focus:outline-none group"
     >
-      <div
-        className="absolute rounded-full blur-2xl opacity-30 transition-all duration-300"
+      <svg
+        viewBox="0 0 220 220"
+        className="animate-float drop-shadow-xl transition-transform duration-300 group-hover:scale-105"
         style={{
-          width: compact ? 80 : 150,
-          height: compact ? 80 : 150,
-          background: accent,
+          width: compact ? 104 : 186,
+          height: compact ? 104 : 186,
           transform: `scale(${scale})`,
         }}
-      />
-      <svg
-        viewBox="0 0 180 180"
-        className="animate-float drop-shadow-2xl transition-transform duration-300 group-hover:scale-105"
-        style={{ width: compact ? 92 : 168, height: compact ? 92 : 168 }}
       >
-        {/* Orbital ring */}
+        <defs>
+          <radialGradient id="mochiBodyGrad" cx="46%" cy="34%" r="62%">
+            <stop offset="0%" stopColor="#C9DC5E" />
+            <stop offset="68%" stopColor="#B8CB4E" />
+            <stop offset="100%" stopColor="#9EB13E" />
+          </radialGradient>
+          <radialGradient id="mochiFaceGrad" cx="50%" cy="48%" r="58%">
+            <stop offset="0%" stopColor="#E4EC9E" />
+            <stop offset="82%" stopColor="#DCE494" />
+            <stop offset="100%" stopColor="#9BA94E" />
+          </radialGradient>
+          <radialGradient id="mochiFloorShadow" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stopColor="#7A5A9E" stopOpacity="0.45" />
+            <stop offset="65%" stopColor="#8E72B5" stopOpacity="0.18" />
+            <stop offset="100%" stopColor="#8E72B5" stopOpacity="0" />
+          </radialGradient>
+        </defs>
+
+        {/* Soft Elliptical Lavender Floor Shadow */}
+        <ellipse cx="110" cy="196" rx="64" ry="12" fill="url(#mochiFloorShadow)" />
+
+        {/* Left Arm (+X viewer right) */}
         <ellipse
-          cx="90"
-          cy="104"
-          rx="68"
-          ry="18"
-          fill="none"
-          stroke={accent}
-          strokeWidth="2.5"
-          strokeDasharray="10 6"
-          opacity="0.7"
+          cx="172"
+          cy="126"
+          rx="14"
+          ry="28"
+          transform="rotate(-8 172 126)"
+          fill="#B2C549"
         />
-        {/* Antenna */}
-        <line x1="90" y1="30" x2="90" y2="16" stroke="#94a3b8" strokeWidth="3" strokeLinecap="round" />
-        <circle cx="90" cy="13" r="6" fill={accent} />
-        {/* Head */}
-        <rect x="44" y="30" width="92" height="68" rx="30" fill="#e2e8f0" stroke="#cbd5e1" strokeWidth="2" />
-        {/* Visor */}
-        <rect x="53" y="42" width="74" height="42" rx="18" fill="#090d16" />
-        {/* Eyes */}
-        <ellipse cx="73" cy="60" rx="7" ry={state === "error" ? 3 : 8} fill={accent} />
-        <ellipse cx="107" cy="60" rx="7" ry={state === "error" ? 3 : 8} fill={accent} />
-        {/* Voice bar */}
+
+        {/* Seamless Pear-Egg Mochi Body */}
+        <path
+          d="M 110 38 C 146 38 172 74 172 118 C 172 158 146 180 110 180 C 74 180 48 158 48 118 C 48 74 74 38 110 38 Z"
+          fill="url(#mochiBodyGrad)"
+        />
+
+        {/* Sideways 6-Panel Baseball Cap */}
+        <g transform="translate(114, 42) rotate(10)">
+          {/* Cap Dome */}
+          <path
+            d="M -32 6 C -32 -18 32 -18 32 6 Z"
+            fill="#C0D354"
+            stroke="#8B7798"
+            strokeWidth="3.2"
+            strokeLinejoin="round"
+          />
+          {/* Meridian Seams */}
+          <path
+            d="M 0 -14 C -8 -6 -12 0 -14 6 M 0 -14 C 8 -6 12 0 14 6"
+            fill="none"
+            stroke="#8B7798"
+            strokeWidth="2.6"
+            strokeLinecap="round"
+          />
+          {/* Top Lime Button (Squatchee) */}
+          <ellipse cx="0" cy="-15" rx="4.2" ry="2.6" fill="#C8DC5E" />
+          {/* Flipped-up Curved Duckbill Brim */}
+          <path
+            d="M -34 4 C -46 -12 -18 -24 4 -2 C -10 4 -24 5 -34 4 Z"
+            fill="#B8CB4E"
+            stroke="#8B7798"
+            strokeWidth="3.4"
+            strokeLinejoin="round"
+          />
+        </g>
+
+        {/* Recessed Stadium Face Window */}
         <rect
-          x="77"
-          y="73"
-          width="26"
-          height={3 + audioLevel * 5}
-          rx="2"
-          fill={accent}
-          opacity="0.9"
+          x="74"
+          y="68"
+          width="72"
+          height="42"
+          rx="21"
+          fill="url(#mochiFaceGrad)"
+          stroke="#A3B352"
+          strokeWidth="2"
         />
-        {/* Body */}
-        <rect x="60" y="104" width="60" height="44" rx="22" fill="#cbd5e1" />
-        <circle cx="90" cy="126" r="10" fill={accent} />
-        {/* Floating Paws */}
-        <circle cx="42" cy="122" r="10" fill="#e2e8f0" />
-        <circle cx="138" cy="122" r="10" fill="#e2e8f0" />
+
+        {/* Temple Freckles */}
+        <circle cx="65" cy="84" r="1.3" fill="#93A444" />
+        <circle cx="62" cy="89" r="1.4" fill="#93A444" />
+        <circle cx="66" cy="93" r="1.2" fill="#93A444" />
+        <circle cx="155" cy="84" r="1.3" fill="#93A444" />
+        <circle cx="158" cy="89" r="1.4" fill="#93A444" />
+        <circle cx="154" cy="93" r="1.2" fill="#93A444" />
+
+        {/* Facial Expressions in Deep Dusty Plum (#6F5C7C) */}
+        {state === "ready" || state === "listening" ? (
+          <g stroke="#6F5C7C" strokeLinecap="round" fill="none">
+            <line x1="93" y1="84" x2="93" y2="94" strokeWidth="4.2" />
+            <line x1="127" y1="84" x2="127" y2="94" strokeWidth="4.2" />
+            {state === "listening" ? (
+              <path d="M 106 91 Q 110 95 114 91 M 110 94 L 110 98" strokeWidth="3.2" />
+            ) : (
+              <path d="M 105 91 Q 110 96 115 91" strokeWidth="3.4" />
+            )}
+          </g>
+        ) : state === "processing" ? (
+          <g stroke="#6F5C7C" strokeLinecap="round" fill="none">
+            <path d="M 86 88 Q 93 93 100 88" strokeWidth="3.5" />
+            <path d="M 120 88 Q 127 93 134 88" strokeWidth="3.5" />
+            <path d="M 109 88 C 113 88 113 95 109 95" strokeWidth="3.2" />
+          </g>
+        ) : state === "executing" ? (
+          <g stroke="#6F5C7C" strokeLinecap="round" fill="none">
+            <path d="M 86 91 Q 93 84 100 91" strokeWidth="3.5" />
+            <path d="M 120 91 Q 127 84 134 91" strokeWidth="3.5" />
+            <path d="M 105 92 Q 110 97 115 92" strokeWidth="3.4" />
+          </g>
+        ) : (
+          <g stroke="#6F5C7C" strokeLinecap="round" strokeLinejoin="round" fill="none">
+            <path d="M 87 84 L 96 89 L 87 94" strokeWidth="3.4" />
+            <path d="M 133 84 L 124 89 L 133 94" strokeWidth="3.4" />
+            {state === "error" ? (
+              <path d="M 105 95 Q 110 90 115 95" strokeWidth="3.4" />
+            ) : (
+              <path d="M 105 91 Q 110 96 115 91" strokeWidth="3.4" />
+            )}
+          </g>
+        )}
+
+        {/* Belly 'x' Stitch */}
+        <g stroke="#786588" strokeWidth="3.4" strokeLinecap="round">
+          <line x1="106" y1="152" x2="114" y2="160" />
+          <line x1="114" y1="152" x2="106" y2="160" />
+        </g>
+
+        {/* Drink Cup + Two-Tone Straw + Right Arm */}
+        <g
+          transform={
+            isSipping
+              ? "translate(18, -14) rotate(12 72 124)"
+              : "translate(0, 0)"
+          }
+        >
+          {/* Two-Tone Bent Straw */}
+          <path
+            d="M 59 110 L 59 92 L 72 80"
+            fill="none"
+            stroke="#8B7798"
+            strokeWidth="6.2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+          <path
+            d="M 61 110 L 61 93 L 73 81"
+            fill="none"
+            stroke="#C4D758"
+            strokeWidth="4.4"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+          {/* Tapered Cup Body */}
+          <polygon points="44,114 78,114 73,154 49,154" fill="#B8CB4E" />
+          {/* Purple Collar Ring */}
+          <rect x="41" y="112" width="40" height="5.5" rx="2.8" fill="#8B7798" />
+          {/* Lime Cup Lid */}
+          <rect x="42" y="106" width="38" height="6.5" rx="3.2" fill="#C4D758" />
+          {/* Right Arm Paw Cradling Cup */}
+          <ellipse cx="47" cy="134" rx="14" ry="12" fill="#C0D354" />
+        </g>
+
+        {/* Bounce Motion Lines on Executing */}
+        {state === "executing" && (
+          <g stroke="#786588" strokeWidth="3" strokeLinecap="round" fill="none">
+            <path d="M 152 176 Q 158 178 163 172" />
+            <path d="M 165 172 Q 171 174 176 168" />
+          </g>
+        )}
       </svg>
     </button>
   );
@@ -106,7 +237,10 @@ export const RobotMascot3D: React.FC<RobotMascot3DProps> = ({
   const audioRef = useRef<number>(audioLevel);
   const themeRef = useRef<"dark" | "light">(theme);
   const onClickRef = useRef<(() => void) | undefined>(onClick);
-  const clickSpinRef = useRef<number>(0);
+  const clickImpulseRef = useRef<number>(0);
+  const clickCycleIdxRef = useRef<number>(0);
+  const playfulOverrideRef = useRef<MascotPoseVariant | null>(null);
+  const playfulTimerRef = useRef<number>(0);
 
   stateRef.current = state;
   audioRef.current = audioLevel;
@@ -136,263 +270,33 @@ export const RobotMascot3D: React.FC<RobotMascot3DProps> = ({
     }
 
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    renderer.setSize(container.clientWidth || 240, container.clientHeight || 220);
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.15;
+    renderer.setSize(
+      container.clientWidth || 240,
+      container.clientHeight || 220
+    );
     container.innerHTML = "";
     container.appendChild(renderer.domElement);
 
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(
-      36,
+      30,
       (container.clientWidth || 240) / (container.clientHeight || 220),
       0.1,
-      100
+      50
     );
-    camera.position.set(0, 0.2, 6.2);
+    camera.position.set(0, 0.36, 5.45);
+    camera.lookAt(0, 0.06, 0);
 
-    // Lighting
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.9);
-    scene.add(ambientLight);
-
-    const keyLight = new THREE.DirectionalLight(0xffffff, 1.8);
-    keyLight.position.set(3, 5, 4);
-    scene.add(keyLight);
-
-    const rimLight = new THREE.DirectionalLight(0x38bdf8, 1.4);
-    rimLight.position.set(-4, 2, -3);
-    scene.add(rimLight);
-
-    const accentPointLight = new THREE.PointLight(0x38bdf8, 2.2, 8);
-    accentPointLight.position.set(0, 0.2, 1.8);
-    scene.add(accentPointLight);
-
-    // Materials
-    const ceramicMat = new THREE.MeshPhysicalMaterial({
-      color: 0xf1f5f9,
-      metalness: 0.14,
-      roughness: 0.18,
-      clearcoat: 1.0,
-      clearcoatRoughness: 0.1,
-    });
-
-    const trimMat = new THREE.MeshStandardMaterial({
-      color: 0x334155,
-      metalness: 0.65,
-      roughness: 0.3,
-    });
-
-    const visorMat = new THREE.MeshPhysicalMaterial({
-      color: 0x050811,
-      metalness: 0.25,
-      roughness: 0.08,
-      clearcoat: 1.0,
-      clearcoatRoughness: 0.04,
-    });
-
-    const glowMat = new THREE.MeshStandardMaterial({
-      color: 0x38bdf8,
-      emissive: 0x38bdf8,
-      emissiveIntensity: 2.0,
-      roughness: 0.2,
-      metalness: 0.1,
-    });
-
-    const ringMat = new THREE.MeshStandardMaterial({
-      color: 0x38bdf8,
-      emissive: 0x38bdf8,
-      emissiveIntensity: 1.4,
-      transparent: true,
-      opacity: 0.85,
-      roughness: 0.2,
-    });
-
-    const shieldMat = new THREE.MeshStandardMaterial({
-      color: 0xf59e0b,
-      emissive: 0xf59e0b,
-      emissiveIntensity: 1.5,
-      transparent: true,
-      opacity: 0,
-      side: THREE.DoubleSide,
-    });
-
-    // Root mascot group
-    const novaGroup = new THREE.Group();
-    scene.add(novaGroup);
-
-    // Head group
-    const headGroup = new THREE.Group();
-    headGroup.position.set(0, 0.65, 0);
-    novaGroup.add(headGroup);
-
-    // Rounded ceramic head (slightly squashed sphere)
-    const headGeo = new THREE.SphereGeometry(0.92, 48, 36);
-    headGeo.scale(1.12, 0.92, 0.96);
-    const headMesh = new THREE.Mesh(headGeo, ceramicMat);
-    headGroup.add(headMesh);
-
-    // Visor
-    const visorGeo = new THREE.SphereGeometry(0.84, 42, 32);
-    visorGeo.scale(1.04, 0.72, 0.78);
-    const visorMesh = new THREE.Mesh(visorGeo, visorMat);
-    visorMesh.position.set(0, -0.02, 0.27);
-    headGroup.add(visorMesh);
-
-    // Left & Right Ear Pods
-    const earGeo = new THREE.CylinderGeometry(0.24, 0.24, 0.18, 24);
-    earGeo.rotateZ(Math.PI / 2);
-    const leftEar = new THREE.Mesh(earGeo, trimMat);
-    leftEar.position.set(-1.05, 0, 0);
-    headGroup.add(leftEar);
-
-    const rightEar = new THREE.Mesh(earGeo, trimMat);
-    rightEar.position.set(1.05, 0, 0);
-    headGroup.add(rightEar);
-
-    const earRingGeo = new THREE.TorusGeometry(0.18, 0.03, 12, 24);
-    earRingGeo.rotateY(Math.PI / 2);
-    const leftEarRing = new THREE.Mesh(earRingGeo, glowMat);
-    leftEarRing.position.set(-1.14, 0, 0);
-    headGroup.add(leftEarRing);
-
-    const rightEarRing = new THREE.Mesh(earRingGeo, glowMat);
-    rightEarRing.position.set(1.14, 0, 0);
-    headGroup.add(rightEarRing);
-
-    // Eyes (expressive LED capsules)
-    const eyeGeo = new THREE.CapsuleGeometry(0.11, 0.14, 8, 16);
-    const leftEye = new THREE.Mesh(eyeGeo, glowMat);
-    leftEye.position.set(-0.32, 0.08, 0.88);
-    headGroup.add(leftEye);
-
-    const rightEye = new THREE.Mesh(eyeGeo, glowMat);
-    rightEye.position.set(0.32, 0.08, 0.88);
-    headGroup.add(rightEye);
-
-    // Mouth / Voice equalizer bar
-    const mouthGeo = new THREE.CapsuleGeometry(0.035, 0.22, 6, 12);
-    mouthGeo.rotateZ(Math.PI / 2);
-    const mouthBar = new THREE.Mesh(mouthGeo, glowMat);
-    mouthBar.position.set(0, -0.2, 0.89);
-    headGroup.add(mouthBar);
-
-    // Scanner beam (for processing/executing)
-    const scanGeo = new THREE.BoxGeometry(1.1, 0.04, 0.05);
-    const scanMat = new THREE.MeshBasicMaterial({
-      color: 0xa855f7,
-      transparent: true,
-      opacity: 0,
-    });
-    const scanBeam = new THREE.Mesh(scanGeo, scanMat);
-    scanBeam.position.set(0, 0, 0.94);
-    headGroup.add(scanBeam);
-
-    // Antenna
-    const stalkGeo = new THREE.CylinderGeometry(0.035, 0.05, 0.42, 12);
-    const stalk = new THREE.Mesh(stalkGeo, trimMat);
-    stalk.position.set(0, 0.98, -0.05);
-    headGroup.add(stalk);
-
-    const orbGeo = new THREE.SphereGeometry(0.14, 24, 24);
-    const antennaOrb = new THREE.Mesh(orbGeo, glowMat);
-    antennaOrb.position.set(0, 1.24, -0.05);
-    headGroup.add(antennaOrb);
-
-    // Body group
-    const bodyGroup = new THREE.Group();
-    bodyGroup.position.set(0, -0.58, 0);
-    novaGroup.add(bodyGroup);
-
-    const torsoGeo = new THREE.CapsuleGeometry(0.46, 0.42, 16, 32);
-    const torsoMesh = new THREE.Mesh(torsoGeo, ceramicMat);
-    bodyGroup.add(torsoMesh);
-
-    const coreGeo = new THREE.SphereGeometry(0.22, 24, 24);
-    const coreMesh = new THREE.Mesh(coreGeo, glowMat);
-    coreMesh.position.set(0, 0.04, 0.36);
-    bodyGroup.add(coreMesh);
-
-    const coreRingGeo = new THREE.TorusGeometry(0.26, 0.028, 12, 32);
-    const coreRing = new THREE.Mesh(coreRingGeo, trimMat);
-    coreRing.position.set(0, 0.04, 0.38);
-    bodyGroup.add(coreRing);
-
-    // Floating magnetic paws/hands
-    const handGeo = new THREE.SphereGeometry(0.19, 24, 24);
-    handGeo.scale(0.95, 1.25, 0.85);
-    const leftHand = new THREE.Mesh(handGeo, ceramicMat);
-    leftHand.position.set(-0.88, -0.45, 0.18);
-    novaGroup.add(leftHand);
-
-    const rightHand = new THREE.Mesh(handGeo, ceramicMat);
-    rightHand.position.set(0.88, -0.45, 0.18);
-    novaGroup.add(rightHand);
-
-    // Orbital energy rings
-    const orbitalGeo1 = new THREE.TorusGeometry(1.58, 0.025, 12, 72);
-    const orbitalRing1 = new THREE.Mesh(orbitalGeo1, ringMat);
-    orbitalRing1.rotation.x = Math.PI / 2.3;
-    orbitalRing1.rotation.y = 0.25;
-    novaGroup.add(orbitalRing1);
-
-    const orbitalGeo2 = new THREE.TorusGeometry(1.75, 0.018, 10, 72);
-    const orbitalRing2 = new THREE.Mesh(orbitalGeo2, ringMat);
-    orbitalRing2.rotation.x = -Math.PI / 2.6;
-    orbitalRing2.rotation.y = -0.35;
-    novaGroup.add(orbitalRing2);
-
-    // Soundwave ring (expands with audioLevel when listening)
-    const soundWaveGeo = new THREE.RingGeometry(1.15, 1.22, 48);
-    const soundWaveMat = new THREE.MeshBasicMaterial({
-      color: 0x34d399,
-      transparent: true,
-      opacity: 0,
-      side: THREE.DoubleSide,
-    });
-    const soundWaveRing = new THREE.Mesh(soundWaveGeo, soundWaveMat);
-    soundWaveRing.position.set(0, 0.3, -0.4);
-    novaGroup.add(soundWaveRing);
-
-    // Guardrail protective shield
-    const shieldGeo = new THREE.RingGeometry(0.95, 1.15, 6);
-    const shieldRing = new THREE.Mesh(shieldGeo, shieldMat);
-    shieldRing.position.set(0, 0.15, 1.35);
-    novaGroup.add(shieldRing);
-
-    // Floating star / data particles
-    const particleCount = 36;
-    const particlePositions = new Float32Array(particleCount * 3);
-    const particleAngles: number[] = [];
-    const particleRadii: number[] = [];
-    const particleHeights: number[] = [];
-
-    for (let i = 0; i < particleCount; i++) {
-      const angle = (i / particleCount) * Math.PI * 2;
-      const radius = 1.5 + (i % 5) * 0.25;
-      const y = ((i % 7) - 3) * 0.38;
-      particleAngles.push(angle);
-      particleRadii.push(radius);
-      particleHeights.push(y);
-      particlePositions[i * 3] = Math.cos(angle) * radius;
-      particlePositions[i * 3 + 1] = y;
-      particlePositions[i * 3 + 2] = Math.sin(angle) * radius;
-    }
-
-    const particleGeo = new THREE.BufferGeometry();
-    particleGeo.setAttribute(
-      "position",
-      new THREE.BufferAttribute(particlePositions, 3)
+    const { pmremGenerator, envTarget, rimLight } = setupMascotStudioLighting(
+      scene,
+      renderer,
+      RoomEnvironment
     );
-    const particleMat = new THREE.PointsMaterial({
-      color: 0x38bdf8,
-      size: 0.06,
-      transparent: true,
-      opacity: 0.75,
-    });
-    const particles = new THREE.Points(particleGeo, particleMat);
-    scene.add(particles);
 
-    // Mouse tracking
+    const rig = createMascotRig();
+    scene.add(rig.root);
+
+    // Mouse pointer tracking
     let targetMouseX = 0;
     let targetMouseY = 0;
     let currentMouseX = 0;
@@ -404,16 +308,21 @@ export const RobotMascot3D: React.FC<RobotMascot3DProps> = ({
       targetMouseX = THREE.MathUtils.clamp(nx, -1, 1);
       targetMouseY = THREE.MathUtils.clamp(ny, -1, 1);
     };
-
     window.addEventListener("pointermove", handlePointerMove, { passive: true });
 
     const handleCanvasClick = () => {
-      clickSpinRef.current = 1.0;
+      clickImpulseRef.current = 1.0;
+      const nextPose =
+        CLICK_PLAYFUL_CYCLE[
+          clickCycleIdxRef.current % CLICK_PLAYFUL_CYCLE.length
+        ];
+      clickCycleIdxRef.current += 1;
+      playfulOverrideRef.current = nextPose;
+      playfulTimerRef.current = 1.65;
       onClickRef.current?.();
     };
     renderer.domElement.addEventListener("click", handleCanvasClick);
 
-    // Resize handling
     const resizeObserver = new ResizeObserver((entries) => {
       for (const entry of entries) {
         const { width, height } = entry.contentRect;
@@ -426,11 +335,9 @@ export const RobotMascot3D: React.FC<RobotMascot3DProps> = ({
     });
     resizeObserver.observe(container);
 
-    // Animation loop
     const clock = new THREE.Clock();
-    const targetColor = new THREE.Color(STATE_COLORS.ready);
-    const currentColor = new THREE.Color(STATE_COLORS.ready);
-    let nextBlinkTime = 2.5;
+    const baseRimColor = new THREE.Color(0xe4d0ff);
+    const errorRimColor = new THREE.Color(0xf9a8d4);
     let rafId = 0;
 
     const animate = () => {
@@ -438,170 +345,39 @@ export const RobotMascot3D: React.FC<RobotMascot3DProps> = ({
       const dt = Math.min(clock.getDelta(), 0.05);
       const t = clock.getElapsedTime();
 
-      const st = stateRef.current;
-      const level = THREE.MathUtils.clamp(audioRef.current, 0, 1);
-
-      // Theme ceramic brightness adjustment
-      ceramicMat.color.setHex(themeRef.current === "dark" ? 0xf1f5f9 : 0xe2e8f0);
-
-      // Smooth state color transition
-      targetColor.set(STATE_COLORS[st] || STATE_COLORS.ready);
-      currentColor.lerp(targetColor, Math.min(1, dt * 6));
-      glowMat.color.copy(currentColor);
-      glowMat.emissive.copy(currentColor);
-      ringMat.color.copy(currentColor);
-      ringMat.emissive.copy(currentColor);
-      rimLight.color.copy(currentColor);
-      accentPointLight.color.copy(currentColor);
-      particleMat.color.copy(currentColor);
-
-      // Mouse smoothing
       currentMouseX += (targetMouseX - currentMouseX) * Math.min(1, dt * 5);
       currentMouseY += (targetMouseY - currentMouseY) * Math.min(1, dt * 5);
 
-      // Click happy spin decay
-      let spinOffset = 0;
-      let waveBoost = 0;
-      if (clickSpinRef.current > 0.001) {
-        clickSpinRef.current = Math.max(0, clickSpinRef.current - dt * 1.8);
-        const p = 1 - clickSpinRef.current;
-        spinOffset = Math.sin(p * Math.PI) * Math.PI * 2;
-        waveBoost = Math.sin(p * Math.PI * 4) * 0.35;
+      if (clickImpulseRef.current > 0.001) {
+        clickImpulseRef.current = Math.max(
+          0,
+          clickImpulseRef.current - dt * 1.9
+        );
       }
 
-      // Base hover bob
-      const bobSpeed = st === "processing" || st === "executing" ? 3.2 : 1.9;
-      const bobAmp = st === "listening" ? 0.06 : 0.09;
-      novaGroup.position.y = Math.sin(t * bobSpeed) * bobAmp;
-
-      // Attentive lean & error tilt
-      let targetRotX = -currentMouseY * 0.22;
-      let targetRotZ = 0;
-      if (st === "listening") {
-        targetRotX += 0.14;
-      } else if (st === "error") {
-        targetRotZ = Math.sin(t * 2.5) * 0.08 - 0.16;
-      }
-
-      novaGroup.rotation.y = currentMouseX * 0.28 + spinOffset;
-      headGroup.rotation.y = currentMouseX * 0.32;
-      headGroup.rotation.x = THREE.MathUtils.lerp(
-        headGroup.rotation.x,
-        targetRotX,
-        dt * 6
-      );
-      headGroup.rotation.z = THREE.MathUtils.lerp(
-        headGroup.rotation.z,
-        targetRotZ,
-        dt * 6
-      );
-
-      // Blinking
-      let eyeScaleY = 1.0;
-      if (t > nextBlinkTime) {
-        const blinkProgress = (t - nextBlinkTime) / 0.16;
-        if (blinkProgress < 1) {
-          eyeScaleY = Math.max(0.08, Math.abs(Math.cos(blinkProgress * Math.PI)));
-        } else {
-          nextBlinkTime = t + 2.8 + Math.random() * 2.8;
+      if (playfulTimerRef.current > 0) {
+        playfulTimerRef.current = Math.max(0, playfulTimerRef.current - dt);
+        if (playfulTimerRef.current === 0) {
+          playfulOverrideRef.current = null;
         }
       }
-      if (clickSpinRef.current > 0.2) {
-        eyeScaleY = 0.25; // happy squint
-      } else if (st === "error") {
-        eyeScaleY = 0.45;
-      }
-      leftEye.scale.set(1, eyeScaleY, 1);
-      rightEye.scale.set(1, eyeScaleY, 1);
 
-      // Mouth / Voice Bar & Antenna Orb Audio Reactivity
-      const voiceScale = st === "listening" ? 1 + level * 2.2 : st === "processing" || st === "executing" ? 1.2 + Math.sin(t * 14) * 0.35 : 1;
-      mouthBar.scale.set(1 + level * 0.35, voiceScale, 1);
+      // Subtle rose rim tint in error state without breaking clay aesthetic
+      rimLight.color.lerp(
+        stateRef.current === "error" ? errorRimColor : baseRimColor,
+        Math.min(1, dt * 5)
+      );
 
-      const orbScale = 1 + (st === "listening" ? level * 0.55 : Math.sin(t * 3) * 0.08);
-      antennaOrb.scale.setScalar(orbScale);
-      glowMat.emissiveIntensity =
-        st === "listening"
-          ? 2.0 + level * 2.5
-          : st === "processing" || st === "executing"
-          ? 2.6 + Math.sin(t * 10) * 0.6
-          : 1.8;
-
-      // Hands animation
-      if (st === "guardrail") {
-        leftHand.position.y = THREE.MathUtils.lerp(leftHand.position.y, 0.22, dt * 7);
-        rightHand.position.y = THREE.MathUtils.lerp(rightHand.position.y, 0.22, dt * 7);
-        leftHand.position.z = THREE.MathUtils.lerp(leftHand.position.z, 0.65, dt * 7);
-        rightHand.position.z = THREE.MathUtils.lerp(rightHand.position.z, 0.65, dt * 7);
-      } else {
-        const handBob = Math.sin(t * 2.4 + 0.8) * 0.08;
-        leftHand.position.y = THREE.MathUtils.lerp(
-          leftHand.position.y,
-          -0.45 + handBob,
-          dt * 6
-        );
-        rightHand.position.y = THREE.MathUtils.lerp(
-          rightHand.position.y,
-          -0.45 - handBob + Math.abs(waveBoost),
-          dt * 6
-        );
-        leftHand.position.z = THREE.MathUtils.lerp(leftHand.position.z, 0.18, dt * 6);
-        rightHand.position.z = THREE.MathUtils.lerp(rightHand.position.z, 0.18, dt * 6);
-      }
-
-      // Orbital rings
-      const ringSpeed =
-        st === "processing" || st === "executing"
-          ? 3.8
-          : st === "listening"
-          ? 1.6 + level * 2.0
-          : 0.65;
-      orbitalRing1.rotation.z += dt * ringSpeed;
-      orbitalRing2.rotation.z -= dt * ringSpeed * 0.8;
-      if (st === "processing" || st === "executing") {
-        orbitalRing2.rotation.x = -Math.PI / 2.6 + Math.sin(t * 3) * 0.45;
-        scanMat.opacity = 0.75;
-        scanBeam.position.y = Math.sin(t * 7) * 0.22;
-      } else {
-        orbitalRing2.rotation.x = THREE.MathUtils.lerp(
-          orbitalRing2.rotation.x,
-          -Math.PI / 2.6,
-          dt * 4
-        );
-        scanMat.opacity = THREE.MathUtils.lerp(scanMat.opacity, 0, dt * 8);
-      }
-
-      // Soundwave ring when listening
-      if (st === "listening") {
-        const waveScale = 1 + ((t * 1.4) % 1) * (0.45 + level * 0.7);
-        soundWaveRing.scale.setScalar(waveScale);
-        soundWaveMat.opacity = (1 - ((t * 1.4) % 1)) * (0.3 + level * 0.55);
-      } else {
-        soundWaveMat.opacity = THREE.MathUtils.lerp(soundWaveMat.opacity, 0, dt * 8);
-      }
-
-      // Guardrail shield
-      if (st === "guardrail") {
-        shieldMat.opacity = THREE.MathUtils.lerp(shieldMat.opacity, 0.68, dt * 6);
-        shieldRing.rotation.z += dt * 1.2;
-      } else {
-        shieldMat.opacity = THREE.MathUtils.lerp(shieldMat.opacity, 0, dt * 8);
-      }
-
-      // Orbit particles
-      const posAttr = particleGeo.getAttribute("position") as THREE.BufferAttribute;
-      const pSpeed = st === "processing" || st === "executing" ? 1.4 : 0.35;
-      for (let i = 0; i < particleCount; i++) {
-        particleAngles[i] += dt * pSpeed * (i % 2 === 0 ? 1 : -0.7);
-        const r = particleRadii[i];
-        posAttr.setXYZ(
-          i,
-          Math.cos(particleAngles[i]) * r,
-          particleHeights[i] + Math.sin(t * 1.5 + i) * 0.08,
-          Math.sin(particleAngles[i]) * r
-        );
-      }
-      posAttr.needsUpdate = true;
+      rig.updateAnimation({
+        state: stateRef.current,
+        audioLevel: audioRef.current,
+        time: t,
+        dt,
+        pointerX: currentMouseX,
+        pointerY: currentMouseY,
+        clickImpulse: clickImpulseRef.current,
+        playfulOverride: playfulOverrideRef.current,
+      });
 
       renderer!.render(scene, camera);
     };
@@ -616,16 +392,9 @@ export const RobotMascot3D: React.FC<RobotMascot3DProps> = ({
         renderer.domElement.removeEventListener("click", handleCanvasClick);
         renderer.dispose();
       }
-      scene.traverse((obj) => {
-        if (obj instanceof THREE.Mesh || obj instanceof THREE.Points) {
-          obj.geometry.dispose();
-          if (Array.isArray(obj.material)) {
-            obj.material.forEach((m) => m.dispose());
-          } else {
-            obj.material.dispose();
-          }
-        }
-      });
+      envTarget.dispose();
+      pmremGenerator.dispose();
+      rig.dispose();
     };
   }, []);
 
@@ -643,7 +412,7 @@ export const RobotMascot3D: React.FC<RobotMascot3DProps> = ({
   return (
     <div
       ref={containerRef}
-      title="Click Nova to toggle microphone"
+      title="Click Mochi companion"
       className="w-full h-full cursor-pointer select-none"
     />
   );

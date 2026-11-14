@@ -1249,7 +1249,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               Application Experience & Updates
             </h3>
             <p className="text-xs text-slate-500 dark:text-[#CAC4D0]">
-              Installed version: v{settings.app_version || "2.1.0"}
+              Installed version: v{settings.app_version || "2.5.0"}
             </p>
           </div>
 
